@@ -1,10 +1,11 @@
 // Regression + behavior tests for MessageModel.queryTopicMessagesByCursor
 // (round-boundary cursor pagination — LOBE-12011, stage 2 server layer).
-import { eq } from 'drizzle-orm';
+import { MessageGroupType } from '@lobechat/types';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../../core/getTestDB';
-import { messages, topics, users } from '../../../schemas';
+import { messageGroups, messages, topics, users } from '../../../schemas';
 import type { LobeChatDatabase } from '../../../type';
 import { MessageModel } from '../../message';
 
@@ -164,5 +165,146 @@ describe('MessageModel.queryTopicMessagesByCursor', () => {
     expect(page.messages).toHaveLength(0);
     expect(page.hasMore).toBe(false);
     expect(page.nextCursor).toBeNull();
+  });
+
+  // LOBE-12011 P1: `messages.createdAt` is a timestamptz whose now() default can
+  // carry microseconds. A cursor round-tripped through a millisecond JS Date would
+  // round sub-millisecond boundaries and drop/duplicate rows across pages. Seed
+  // rows that all share ONE millisecond but differ by microseconds and prove the
+  // backward walk still reconstructs the transcript exactly.
+  it('preserves microsecond precision across cursor pages (no leak within a millisecond)', async () => {
+    const topicId = 't-cursor-micros';
+    await serverDB.insert(topics).values([{ id: topicId, userId }]);
+
+    // 3 rounds x (user, assistant) = 6 messages, all within 2023-01-01T00:00:00.000
+    // but 1..6 microseconds apart, ascending in time.
+    const roles = ['user', 'assistant', 'user', 'assistant', 'user', 'assistant'];
+    let prev: string | null = null;
+    const ids: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const id = `${topicId}-m${i + 1}`;
+      const micros = String(i + 1).padStart(6, '0');
+      await serverDB.insert(messages).values({
+        content: `c${i + 1}`,
+        createdAt: sql`${`2023-01-01T00:00:00.${micros}Z`}::timestamptz`,
+        id,
+        parentId: prev,
+        role: roles[i] as any,
+        topicId,
+        userId,
+      });
+      ids.push(id);
+      prev = id;
+    }
+
+    const collected: string[][] = [];
+    let cursor: any = null;
+    for (let i = 0; i < 10; i += 1) {
+      const page = await messageModel.queryTopicMessagesByCursor({
+        topicId,
+        roundLimit: 1,
+        cursor,
+      });
+      collected.push(page.messages.map((m) => m.id));
+      if (!page.hasMore) break;
+      cursor = page.nextCursor;
+    }
+
+    // 3 rounds / 1 per page = 3 pages, and reversing the page order rebuilds all
+    // six ids with none dropped in a sub-millisecond boundary gap and none doubled.
+    expect(collected).toHaveLength(3);
+    const rebuilt = [...collected].reverse().flat();
+    expect(rebuilt).toEqual(ids);
+    expect(new Set(rebuilt).size).toBe(ids.length);
+  });
+
+  // LOBE-12011 P1: the cursor path must constrain MessageGroup assembly to the
+  // page's time window. Otherwise every page eagerly loads (and repeats) the whole
+  // topic's compression groups — exactly the compressed history cursor pagination
+  // exists to defer.
+  it('windows out compression groups that fall outside the page range', async () => {
+    const topicId = 't-cursor-groups';
+    await serverDB.insert(topics).values([{ id: topicId, userId }]);
+
+    // Old compressed history (early), then two newer uncompressed mainline rounds.
+    await serverDB.insert(messages).values([
+      {
+        id: `${topicId}-old1`,
+        userId,
+        topicId,
+        role: 'user',
+        content: 'old1',
+        createdAt: new Date('2024-01-01T10:00:00Z'),
+      },
+      {
+        id: `${topicId}-old2`,
+        userId,
+        topicId,
+        role: 'assistant',
+        content: 'old2',
+        createdAt: new Date('2024-01-01T10:00:01Z'),
+      },
+      {
+        id: `${topicId}-u1`,
+        userId,
+        topicId,
+        role: 'user',
+        content: 'q1',
+        parentId: `${topicId}-old2`,
+        createdAt: new Date('2024-01-01T10:05:00Z'),
+      },
+      {
+        id: `${topicId}-a1`,
+        userId,
+        topicId,
+        role: 'assistant',
+        content: 'a1',
+        parentId: `${topicId}-u1`,
+        createdAt: new Date('2024-01-01T10:05:01Z'),
+      },
+      {
+        id: `${topicId}-u2`,
+        userId,
+        topicId,
+        role: 'user',
+        content: 'q2',
+        parentId: `${topicId}-a1`,
+        createdAt: new Date('2024-01-01T10:06:00Z'),
+      },
+      {
+        id: `${topicId}-a2`,
+        userId,
+        topicId,
+        role: 'assistant',
+        content: 'a2',
+        parentId: `${topicId}-u2`,
+        createdAt: new Date('2024-01-01T10:06:01Z'),
+      },
+    ]);
+
+    // A compression group covering the old messages, dated in the old range.
+    await serverDB.insert(messageGroups).values({
+      id: `${topicId}-cg`,
+      content: 'summary of early conversation',
+      type: MessageGroupType.Compression,
+      topicId,
+      userId,
+      createdAt: new Date('2024-01-01T10:00:30Z'),
+    });
+    await serverDB
+      .update(messages)
+      .set({ messageGroupId: `${topicId}-cg` })
+      .where(inArray(messages.id, [`${topicId}-old1`, `${topicId}-old2`]));
+
+    // Newest cursor page (round 2 only) is windowed to [10:06:00, now]; the group
+    // at 10:00:30 is outside it and must not be pulled in.
+    const page = await messageModel.queryTopicMessagesByCursor({ topicId, roundLimit: 1 });
+    expect(page.messages.some((m) => m.role === 'compressedGroup')).toBe(false);
+    expect(page.messages.map((m) => m.id)).toEqual([`${topicId}-u2`, `${topicId}-a2`]);
+
+    // The group still exists and the full (client-mode) query surfaces it — proving
+    // the cursor page omitted it by windowing, not because it was absent.
+    const full = await messageModel.query({ topicId });
+    expect(full.some((m) => m.role === 'compressedGroup' && m.id === `${topicId}-cg`)).toBe(true);
   });
 });
