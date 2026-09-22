@@ -1070,8 +1070,12 @@ export class AiAgentService {
           ? { ...appContext, editingAgentId: turn.editingAgentId }
           : appContext,
       assistantMessageId: turn.assistantMessageId,
+      botContext,
+      botPlatformContext,
       canUseDevice,
       deviceAccessReason,
+      disabledPluginIds,
+      discordContext,
       model,
       parentMessageId,
       persistAgentId,
@@ -1214,13 +1218,9 @@ export class AiAgentService {
       approvalOwnerAssistantId,
       approvedToolEntries,
       attachedFileIds,
-      botContext,
-      botPlatformContext,
       disableLocalSystem,
       disableSelfFeedbackIntentTool: params.disableSelfFeedbackIntentTool,
       disableTools: params.disableTools,
-      disabledPluginIds,
-      discordContext,
       ephemeralUserMessage,
       exclusivePluginIds,
       files,
@@ -1230,7 +1230,6 @@ export class AiAgentService {
       isFixedDeviceTarget: turn.isFixedDeviceTarget,
       localDeviceId,
       mentionedAgents,
-      operationId,
       parentMessageId,
       requestTrigger: requestTriggerMetadata.trigger,
       requestedDeviceId: turn.requestedDeviceId,
@@ -1264,6 +1263,7 @@ export class AiAgentService {
       },
       runContext,
       initRequest,
+      operationId,
     );
 
     // 17. Log final operation parameters summary
