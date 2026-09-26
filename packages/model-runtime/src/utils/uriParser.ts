@@ -113,6 +113,10 @@ const parseContentRangeTotal = (contentRange: string | null): number | null => {
  * Inline data: 100MB general, 50MB for PDFs
  */
 const MAX_EXTERNAL_URL_SIZE = 100 * 1024 * 1024; // 100MB for external URLs (all types)
+const MAX_INLINE_DATA_SIZE = 100 * 1024 * 1024; // 100MB for inline data (general)
+const MAX_INLINE_PDF_SIZE = 50 * 1024 * 1024; // 50MB for inline PDFs only
+
+export { MAX_INLINE_DATA_SIZE, MAX_INLINE_PDF_SIZE };
 
 /**
  * Upper bound for the whole validation probe, including reading its single body byte.
@@ -120,10 +124,6 @@ const MAX_EXTERNAL_URL_SIZE = 100 * 1024 * 1024; // 100MB for external URLs (all
  * already received, so without this the caller would wait forever instead of falling back.
  */
 export const VALIDATE_EXTERNAL_URL_TIMEOUT_MS = 10_000;
-const MAX_INLINE_DATA_SIZE = 100 * 1024 * 1024; // 100MB for inline data (general)
-const MAX_INLINE_PDF_SIZE = 50 * 1024 * 1024; // 50MB for inline PDFs only
-
-export { MAX_INLINE_DATA_SIZE, MAX_INLINE_PDF_SIZE };
 
 export interface ExternalUrlValidation {
   /** Content-Length from response headers */
@@ -157,19 +157,14 @@ export const isPublicExternalUrl = (url: string): boolean => {
   }
 };
 
+type ExternalUrlProbe =
+  { contentLength: number | null; contentType: string; ok: true } | { ok: false; reason: string };
+
 /**
- * Validate an external URL for Google Gemini file input
- * Probes the URL with a single-byte ranged GET to read Content-Type and the total size
- *
- * A HEAD request is not used on purpose: S3/R2 presigned URLs sign the HTTP method,
- * so a URL presigned for GET always answers HEAD with 403. That made every private
- * bucket file fail validation and fall back to downloading + inlining the whole
- * file as base64, which blows past V8's max string length on media-heavy topics.
- *
- * @param url - The URL to validate
- * @returns Validation result with content info
+ * Read an external URL's content type and total size with a single request.
+ * Each probe gets its own timeout so a stalled first probe cannot starve the fallback.
  */
-export const validateExternalUrl = async (url: string): Promise<ExternalUrlValidation> => {
+const probeExternalUrl = async (url: string, method: 'GET' | 'HEAD'): Promise<ExternalUrlProbe> => {
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(new Error(`Timed out after ${VALIDATE_EXTERNAL_URL_TIMEOUT_MS}ms`)),
@@ -181,10 +176,10 @@ export const validateExternalUrl = async (url: string): Promise<ExternalUrlValid
       url,
       {
         headers: {
-          'Range': 'bytes=0-0',
+          ...(method === 'GET' && { Range: 'bytes=0-0' }),
           'User-Agent': 'LobeChat/1.0 (https://lobehub.com)',
         },
-        method: 'GET',
+        method,
         signal: controller.signal,
       },
       {
@@ -192,72 +187,100 @@ export const validateExternalUrl = async (url: string): Promise<ExternalUrlValid
         allowPrivateIPAddress: false,
         // Servers that ignore Range reply 200 with the full body; stop reading after
         // one byte so validation never downloads the file.
-        maxContentLength: 1,
+        ...(method === 'GET' && { maxContentLength: 1 }),
       },
     );
 
-    if (!res.ok) {
-      return {
-        contentLength: 0,
-        contentType: '',
-        isValid: false,
-        reason: `HTTP ${res.status}: ${res.statusText}`,
-      };
-    }
+    // The browser build returns the native Response with its body unread; cancel it so a
+    // server that ignored Range does not keep streaming the whole file.
+    res.body?.cancel().catch(() => {});
 
-    // 206 carries the total size in Content-Range; Content-Length is only the range length.
-    const contentLength =
-      res.status === 206
-        ? parseContentRangeTotal(res.headers.get('content-range'))
-        : parseContentLength(res.headers.get('content-length'));
-    const contentType = normalizeExternalContentType(
-      (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase(),
-    );
-
-    // Check MIME type support
-    if (!GOOGLE_EXTERNAL_URL_SUPPORTED_TYPES.has(contentType)) {
-      return {
-        contentLength: contentLength || 0,
-        contentType,
-        isValid: false,
-        reason: `Unsupported content type: ${contentType}`,
-      };
-    }
-
-    if (contentLength === null) {
-      return {
-        contentLength: 0,
-        contentType,
-        isValid: false,
-        reason: 'Missing or invalid content size header',
-      };
-    }
-
-    // Check file size - External URLs support 100MB for all file types
-    // (Unlike inline data where PDFs are limited to 50MB)
-    if (contentLength > MAX_EXTERNAL_URL_SIZE) {
-      return {
-        contentLength,
-        contentType,
-        isTooLarge: true,
-        isValid: false,
-        reason: `File too large: ${contentLength} bytes (max ${MAX_EXTERNAL_URL_SIZE} bytes)`,
-      };
-    }
+    if (!res.ok) return { ok: false, reason: `HTTP ${res.status}: ${res.statusText}` };
 
     return {
-      contentLength,
-      contentType,
-      isValid: true,
+      // 206 carries the total size in Content-Range; Content-Length is only the range length.
+      contentLength:
+        res.status === 206
+          ? parseContentRangeTotal(res.headers.get('content-range'))
+          : parseContentLength(res.headers.get('content-length')),
+      contentType: normalizeExternalContentType(
+        (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase(),
+      ),
+      ok: true,
     };
   } catch (error) {
     return {
-      contentLength: 0,
-      contentType: '',
-      isValid: false,
+      ok: false,
       reason: `Failed to validate URL: ${error instanceof Error ? error.message : String(error)}`,
     };
   } finally {
     clearTimeout(timer);
   }
+};
+
+/**
+ * Validate an external URL for Google Gemini file input
+ * Probes the URL with a single-byte ranged GET, falling back to HEAD, to read Content-Type
+ * and the total size
+ *
+ * The ranged GET comes first because S3/R2 presigned URLs sign the HTTP method: a URL
+ * presigned for GET always answers HEAD with 403. That made every private bucket file fail
+ * validation and fall back to downloading + inlining the whole file as base64, which blows
+ * past V8's max string length on media-heavy topics.
+ *
+ * HEAD stays as the fallback because the ranged GET can fail where HEAD works. In browser
+ * client-fetch mode the Range header forces a CORS preflight, and a cross-origin 206 hides
+ * Content-Range unless the host exposes it, while HEAD's Content-Length is CORS-safelisted.
+ *
+ * @param url - The URL to validate
+ * @returns Validation result with content info
+ */
+export const validateExternalUrl = async (url: string): Promise<ExternalUrlValidation> => {
+  let probe = await probeExternalUrl(url, 'GET');
+
+  if (!probe.ok || probe.contentLength === null) {
+    const headProbe = await probeExternalUrl(url, 'HEAD');
+    // Keep the ranged GET result when HEAD fails too: its reason is the one worth reporting,
+    // since a presigned URL rejecting HEAD says nothing about the file.
+    if (headProbe.ok) probe = headProbe;
+  }
+
+  if (!probe.ok) {
+    return { contentLength: 0, contentType: '', isValid: false, reason: probe.reason };
+  }
+
+  const { contentLength, contentType } = probe;
+
+  // Check MIME type support
+  if (!GOOGLE_EXTERNAL_URL_SUPPORTED_TYPES.has(contentType)) {
+    return {
+      contentLength: contentLength || 0,
+      contentType,
+      isValid: false,
+      reason: `Unsupported content type: ${contentType}`,
+    };
+  }
+
+  if (contentLength === null) {
+    return {
+      contentLength: 0,
+      contentType,
+      isValid: false,
+      reason: 'Missing or invalid content size header',
+    };
+  }
+
+  // Check file size - External URLs support 100MB for all file types
+  // (Unlike inline data where PDFs are limited to 50MB)
+  if (contentLength > MAX_EXTERNAL_URL_SIZE) {
+    return {
+      contentLength,
+      contentType,
+      isTooLarge: true,
+      isValid: false,
+      reason: `File too large: ${contentLength} bytes (max ${MAX_EXTERNAL_URL_SIZE} bytes)`,
+    };
+  }
+
+  return { contentLength, contentType, isValid: true };
 };

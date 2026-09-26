@@ -69,7 +69,7 @@ describe('parseDataUri', () => {
 
 describe('validateExternalUrl', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('should probe with a single-byte ranged GET instead of HEAD', async () => {
@@ -96,12 +96,14 @@ describe('validateExternalUrl', () => {
   it('should abort and fail validation when the probe stalls', async () => {
     vi.useFakeTimers();
     try {
-      vi.mocked(ssrfSafeFetch).mockImplementationOnce(
-        (_url, init) =>
-          new Promise((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
-          }),
-      );
+      vi.mocked(ssrfSafeFetch)
+        .mockImplementationOnce(
+          (_url, init) =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+            }),
+        )
+        .mockResolvedValueOnce(mockProbeResponse({}, 403));
 
       const pending = validateExternalUrl('https://example.com/stalled.mp4');
       await vi.advanceTimersByTimeAsync(VALIDATE_EXTERNAL_URL_TIMEOUT_MS);
@@ -115,6 +117,48 @@ describe('validateExternalUrl', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('should fall back to HEAD when a cross-origin 206 hides Content-Range', async () => {
+    // Browser client-fetch: without Access-Control-Expose-Headers only safelisted headers show
+    vi.mocked(ssrfSafeFetch)
+      .mockResolvedValueOnce(
+        mockProbeResponse({ 'content-length': '1', 'content-type': 'video/mp4' }, 206),
+      )
+      .mockResolvedValueOnce(
+        mockProbeResponse({ 'content-length': '36255155', 'content-type': 'video/mp4' }),
+      );
+
+    const result = await validateExternalUrl('https://cdn.example.com/video.mp4');
+
+    expect(vi.mocked(ssrfSafeFetch).mock.calls[1][1]).toMatchObject({ method: 'HEAD' });
+    expect(result).toEqual({ contentLength: 36_255_155, contentType: 'video/mp4', isValid: true });
+  });
+
+  it('should fall back to HEAD when the ranged GET fails', async () => {
+    vi.mocked(ssrfSafeFetch)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(
+        mockProbeResponse({ 'content-length': '1024', 'content-type': 'image/png' }),
+      );
+
+    const result = await validateExternalUrl('https://cdn.example.com/image.png');
+
+    expect(vi.mocked(ssrfSafeFetch).mock.calls[1][1]).toMatchObject({ method: 'HEAD' });
+    expect(result).toEqual({ contentLength: 1024, contentType: 'image/png', isValid: true });
+  });
+
+  it('should not send HEAD when the ranged GET already has the size', async () => {
+    vi.mocked(ssrfSafeFetch).mockResolvedValueOnce(
+      mockProbeResponse(
+        { 'content-length': '1', 'content-range': 'bytes 0-0/1024', 'content-type': 'image/png' },
+        206,
+      ),
+    );
+
+    await validateExternalUrl('https://example.com/image.png');
+
+    expect(ssrfSafeFetch).toHaveBeenCalledTimes(1);
   });
 
   it('should read the total size from Content-Range on a 206 response', async () => {
@@ -139,12 +183,14 @@ describe('validateExternalUrl', () => {
   });
 
   it('should reject a 206 response whose total size is unknown', async () => {
-    vi.mocked(ssrfSafeFetch).mockResolvedValueOnce(
-      mockProbeResponse(
-        { 'content-length': '1', 'content-range': 'bytes 0-0/*', 'content-type': 'video/mp4' },
-        206,
-      ),
-    );
+    vi.mocked(ssrfSafeFetch)
+      .mockResolvedValueOnce(
+        mockProbeResponse(
+          { 'content-length': '1', 'content-range': 'bytes 0-0/*', 'content-type': 'video/mp4' },
+          206,
+        ),
+      )
+      .mockResolvedValueOnce(mockProbeResponse({}, 403));
 
     const result = await validateExternalUrl('https://example.com/video.mp4');
 
@@ -175,7 +221,7 @@ describe('validateExternalUrl', () => {
   });
 
   it('should report the HTTP status when the probe is rejected', async () => {
-    vi.mocked(ssrfSafeFetch).mockResolvedValueOnce(mockProbeResponse({}, 403));
+    vi.mocked(ssrfSafeFetch).mockResolvedValue(mockProbeResponse({}, 403));
 
     const result = await validateExternalUrl('https://example.com/private.mp4');
 
@@ -258,9 +304,7 @@ describe('validateExternalUrl', () => {
   });
 
   it('should reject supported MIME types when Content-Length is missing', async () => {
-    vi.mocked(ssrfSafeFetch).mockResolvedValueOnce(
-      mockProbeResponse({ 'content-type': 'image/png' }),
-    );
+    vi.mocked(ssrfSafeFetch).mockResolvedValue(mockProbeResponse({ 'content-type': 'image/png' }));
 
     const result = await validateExternalUrl('https://example.com/image.png');
 
@@ -273,7 +317,7 @@ describe('validateExternalUrl', () => {
   });
 
   it('should reject supported MIME types when Content-Length is invalid', async () => {
-    vi.mocked(ssrfSafeFetch).mockResolvedValueOnce(
+    vi.mocked(ssrfSafeFetch).mockResolvedValue(
       mockProbeResponse({ 'content-length': 'unknown', 'content-type': 'image/png' }),
     );
 
