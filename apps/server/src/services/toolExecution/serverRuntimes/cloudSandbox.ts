@@ -7,6 +7,7 @@ import { FileService } from '@/server/services/file';
 import { MarketService } from '@/server/services/market';
 import { createSandboxService } from '@/server/services/sandbox';
 import {
+  isDirectLhInvocation,
   isLhCommand,
   preprocessLhCommand,
   SHARE_VISITOR_LH_BLOCKED_MESSAGE,
@@ -61,7 +62,7 @@ const withLhPreprocessing = (
     // silently falling through to `preprocessLhCommand` (which independently
     // refuses too — see its `shareVisitorBlocked` param — but this is the
     // primary, intended-to-be-load-bearing check).
-    if (resolve.isShareVisitor && isLhCommand(command)) {
+    if (resolve.isShareVisitor && isDirectLhInvocation(command)) {
       // Deliberately no command content: it is visitor/model-controlled and
       // may carry an inline token — same as the `preprocessLhCommand` refusal.
       log(

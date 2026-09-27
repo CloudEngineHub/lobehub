@@ -30,15 +30,31 @@ export interface PreprocessResult {
  * got no credentials, fell through to the sandbox's own unauthenticated `lh`
  * install, and failed with "No authentication found" mid-session.
  *
- * This is a DETECTION-only heuristic: the command itself is never rewritten
- * (see `preprocessLhCommand`), so a false positive costs one unused shim while
- * a false negative costs a broken `lh` invocation. Erring permissive is
- * therefore the right trade — e.g. `echo 'use lh'` matches even though the
- * `lh` is quoted text.
+ * This decides whether to inject the shim, never whether to refuse a command:
+ * a false positive costs one unused shim while a false negative costs a broken
+ * `lh` invocation, so erring permissive is the right trade — e.g.
+ * `echo 'use lh'` matches even though the `lh` is quoted text. Refusals use
+ * the stricter {@link isDirectLhInvocation}.
  */
 const LH_COMMAND_PATTERN = /(?<![\w./~-])lh(?![\w./-])/;
 
 export const isLhCommand = (command: string): boolean => LH_COMMAND_PATTERN.test(command);
+
+/**
+ * `lh` in shell **command position**: at the start of the script or right after
+ * a separator / opening construct (newline, `;`, `&`, `|`, `(`, `)`, backtick,
+ * `{`, compound-command keywords), optionally behind `!` / `time` and inline
+ * `VAR=value` assignments.
+ *
+ * Used where a match REFUSES the command (share-visitor runs), so it must not
+ * fire on text that merely mentions `lh` — a harmless `echo 'use lh'` would be
+ * rejected outright by {@link isLhCommand}.
+ */
+const LH_DIRECT_INVOCATION_PATTERN =
+  /(?:^|[\n;&|()`{]|\b(?:do|then|else|if|elif|while|until)\b)[\t ]*(?:(?:!|\btime)[\t ]+)*(?:[A-Za-z_]\w*=(?:'[^']*'|"[^"]*"|[^\s'"&;|]*)[\t ]+)*lh(?=[\s;&|)]|$)/;
+
+export const isDirectLhInvocation = (command: string): boolean =>
+  LH_DIRECT_INVOCATION_PATTERN.test(command);
 
 /**
  * Env overrides for a workspace run executing ON THE USER'S DEVICE rather than
@@ -86,11 +102,13 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", St
  * of `PATH`:
  *
  * ```sh
- * __lobehub_lh_bin=$(mktemp -d) && cat > "$__lobehub_lh_bin/lh" <<'…' && chmod +x … && export PATH=…
+ * __lobehub_lh_bin=$(mktemp -d) && trap 'rm -rf …' EXIT && … && cat > …/lh <<'…' && chmod 700 … && export PATH=…
  * #!/bin/sh
  * LOBEHUB_JWT='…' LOBEHUB_SERVER='…' LOBEHUB_WORKSPACE_ID='…' exec npx -y @lobehub/cli "$@"
  * …
+ * (
  * <original command>
+ * )
  * ```
  *
  * It has to be an executable on `PATH`, not a shell function: a function only
@@ -105,6 +123,11 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", St
  * in the environment of every command the model wrote, where any later `env`,
  * `echo $LOBEHUB_JWT`, `curl` or child process could read it. Only `PATH` is
  * exported; the token stays scoped to the `npx` process the wrapper execs.
+ *
+ * The sandbox session outlives the command, so the wrapper must not: the EXIT
+ * trap deletes it once the script ends, and the command runs in a subshell so
+ * its own `trap` or `exit` cannot skip that cleanup. A later command in the
+ * same sandbox finds no token on disk.
  *
  * `LOBEHUB_WORKSPACE_ID` is what keeps a workspace run's CLI calls in the
  * workspace: without it the CLI resolves to personal scope and a workspace
@@ -132,6 +155,13 @@ export const preprocessLhCommand = async (
   }
 
   if (shareVisitorBlocked) {
+    // Never mint for a visitor. Only refuse an actual `lh` invocation: a
+    // command that merely mentions `lh` runs unchanged, and any `lh` it reaches
+    // indirectly just meets the sandbox's own unauthenticated install.
+    if (!isDirectLhInvocation(command)) {
+      return { command, isLhCommand: false, skipSkillLookup: false };
+    }
+
     log('Refused lh command for Agent Share visitor run (user %s)', userId);
     return {
       command,
@@ -152,15 +182,31 @@ export const preprocessLhCommand = async (
       ...(workspaceId ? [`LOBEHUB_WORKSPACE_ID=${shellSingleQuote(workspaceId)}`] : []),
     ].join(' ');
 
+    const dir = `"$${LH_SHIM_DIR_VAR}"`;
     // Newline-separated (not `;`-separated) so a command whose first line is a
     // comment or a shebang cannot swallow the shim. The heredoc delimiter is
     // quoted, so the wrapper body is written verbatim.
     const finalCommand = [
-      `${LH_SHIM_DIR_VAR}=$(mktemp -d) && cat > "$${LH_SHIM_DIR_VAR}/lh" <<'${LH_SHIM_EOF}' && chmod +x "$${LH_SHIM_DIR_VAR}/lh" && export PATH="$${LH_SHIM_DIR_VAR}:$PATH"`,
+      [
+        `${LH_SHIM_DIR_VAR}=$(mktemp -d)`,
+        `trap 'rm -rf ${dir}' EXIT`,
+        // A trapped signal would otherwise resume the script; exiting runs the
+        // EXIT cleanup above.
+        `trap 'exit 129' HUP`,
+        `trap 'exit 130' INT`,
+        `trap 'exit 143' TERM`,
+        `cat > ${dir}/lh <<'${LH_SHIM_EOF}'`,
+        `chmod 700 ${dir}/lh`,
+        `export PATH=${dir}:"$PATH"`,
+      ].join(' && '),
       '#!/bin/sh',
       `${envAssignments} exec npx -y @lobehub/cli "$@"`,
       LH_SHIM_EOF,
+      // A subshell, so the command's own `trap … EXIT` or `exit` cannot skip the
+      // cleanup; its exit status is still the script's.
+      '(',
       command,
+      ')',
     ].join('\n');
 
     log(

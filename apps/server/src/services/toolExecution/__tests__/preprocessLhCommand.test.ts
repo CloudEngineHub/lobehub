@@ -1,11 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { buildDeviceLhEnv, isLhCommand, preprocessLhCommand } from '../preprocessLhCommand';
+import {
+  buildDeviceLhEnv,
+  isDirectLhInvocation,
+  isLhCommand,
+  preprocessLhCommand,
+} from '../preprocessLhCommand';
 
 const mockSignUserJWT = vi.hoisted(() => vi.fn().mockResolvedValue('mock-jwt-token'));
 
@@ -26,12 +31,15 @@ const CREDS = "LOBEHUB_JWT='mock-jwt-token' LOBEHUB_SERVER='https://app.lobehub.
  * The shim: an `lh` executable written to a fresh `PATH` directory, with
  * credentials scoped to the `npx` process it execs rather than exported.
  */
-const shim = (extraEnv = '') =>
+const wrap = (command: string, extraEnv = '') =>
   [
-    `__lobehub_lh_bin=$(mktemp -d) && cat > "$__lobehub_lh_bin/lh" <<'__LOBEHUB_LH_SHIM__' && chmod +x "$__lobehub_lh_bin/lh" && export PATH="$__lobehub_lh_bin:$PATH"`,
+    `__lobehub_lh_bin=$(mktemp -d) && trap 'rm -rf "$__lobehub_lh_bin"' EXIT && trap 'exit 129' HUP && trap 'exit 130' INT && trap 'exit 143' TERM && cat > "$__lobehub_lh_bin"/lh <<'__LOBEHUB_LH_SHIM__' && chmod 700 "$__lobehub_lh_bin"/lh && export PATH="$__lobehub_lh_bin":"$PATH"`,
     '#!/bin/sh',
     `${CREDS}${extraEnv} exec npx -y @lobehub/cli "$@"`,
     '__LOBEHUB_LH_SHIM__',
+    '(',
+    command,
+    ')',
   ].join('\n');
 
 describe('preprocessLhCommand', () => {
@@ -48,14 +56,14 @@ describe('preprocessLhCommand', () => {
 
     expect(result.isLhCommand).toBe(true);
     expect(result.skipSkillLookup).toBe(true);
-    expect(result.command).toBe(`${shim()}\nlh topic list --json`);
+    expect(result.command).toBe(wrap('lh topic list --json'));
   });
 
   it('should inject workspace scope for lh commands from workspace runs', async () => {
     const result = await preprocessLhCommand('lh agent view agt_123', 'user-1', 'workspace-1');
 
     expect(result.command).toBe(
-      `${shim(" LOBEHUB_WORKSPACE_ID='workspace-1'")}\nlh agent view agt_123`,
+      wrap('lh agent view agt_123', " LOBEHUB_WORKSPACE_ID='workspace-1'"),
     );
   });
 
@@ -63,7 +71,7 @@ describe('preprocessLhCommand', () => {
     const cmd = 'lh topic list --page 1 && lh topic list --page 2 && echo "done"';
     const result = await preprocessLhCommand(cmd, 'user-1');
 
-    expect(result.command).toBe(`${shim()}\n${cmd}`);
+    expect(result.command).toBe(wrap(cmd));
     expect(result.command.match(/mock-jwt-token/g)).toHaveLength(1);
   });
 
@@ -119,6 +127,19 @@ describe('preprocessLhCommand', () => {
     expect(result.isLhCommand).toBe(true);
     expect(result.error).toBe('The LobeHub CLI is unavailable in shared conversations.');
     expect(result.command).toBe('lh topic list');
+    expect(mockSignUserJWT).not.toHaveBeenCalled();
+  });
+
+  // Regression: the permissive shim detector also drove the visitor refusal,
+  // so a harmless command that merely mentions `lh` was rejected outright.
+  it('should run a visitor command that only mentions lh unchanged, without signing', async () => {
+    mockSignUserJWT.mockClear();
+
+    const command = "echo 'the lh CLI is unavailable here'";
+    const result = await preprocessLhCommand(command, 'user-1', undefined, true);
+
+    expect(result.error).toBeUndefined();
+    expect(result.command).toBe(command);
     expect(mockSignUserJWT).not.toHaveBeenCalled();
   });
 
@@ -182,6 +203,26 @@ describe('preprocessLhCommand in a real shell', () => {
     ],
   ])('authenticates an lh reached through %s', async (_label, command) => {
     expect(await run(command)).toBe('cli jwt=mock-jwt-token\n');
+  });
+
+  // Regression: the sandbox session outlives the command, so a wrapper left on
+  // disk kept a live user token readable by every later command in the topic.
+  it('removes the credentialed wrapper once the command ends', async () => {
+    const dir = await run('lh whoami >/dev/null; printf %s "$__lobehub_lh_bin"');
+
+    expect(dir).not.toBe('');
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('removes it even when the command traps EXIT itself and exits non-zero', async () => {
+    const error = await run(
+      `lh whoami >/dev/null; trap 'echo bye' EXIT; printf '%s\\n' "$__lobehub_lh_bin"; exit 3`,
+    ).catch((error_: { status: number; stdout: string }) => error_);
+
+    expect(error).toMatchObject({ status: 3 });
+    const [dir] = (error as { stdout: string }).stdout.split('\n');
+    expect(dir).not.toBe('');
+    expect(existsSync(dir)).toBe(false);
   });
 
   it('keeps the token out of the script environment', async () => {
@@ -253,6 +294,28 @@ describe('isLhCommand', () => {
     ['a home-relative path', '~/lh whoami'],
   ])('does not detect %s', (_label, command) => {
     expect(isLhCommand(command)).toBe(false);
+  });
+});
+
+describe('isDirectLhInvocation', () => {
+  it.each([
+    ['bare', 'lh agent list'],
+    ['after &&', 'cd /tmp && lh agent view agt_1'],
+    ['second line of a script', 'echo hi\nlh whoami'],
+    ['negated if condition', 'if ! lh whoami; then echo no; fi'],
+  ])('detects %s', (_label, command) => {
+    expect(isDirectLhInvocation(command)).toBe(true);
+  });
+
+  // These only mention `lh` (or reach it through another program), so a
+  // visitor refusal keyed on them would block harmless commands.
+  it.each([
+    ['quoted prose', "echo 'the lh CLI is unavailable here'"],
+    ['a comment', '# lh is not available\nls'],
+    ['a timeout wrapper', 'timeout 60 lh whoami'],
+  ])('does not detect %s', (_label, command) => {
+    expect(isLhCommand(command)).toBe(true);
+    expect(isDirectLhInvocation(command)).toBe(false);
   });
 });
 
