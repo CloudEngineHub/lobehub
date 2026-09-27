@@ -275,6 +275,20 @@ Some paragraph that must not become the description.`;
       ).toThrow(SkillManifestError);
     });
 
+    it('should ignore a literal comment opener inside a fenced example', () => {
+      const result = parser.parseSkillMd(
+        '# Title\n\n```html\n<!-- example opener\n```\n\nReal summary.\n',
+      );
+
+      expect(result.manifest.description).toBe('Real summary.');
+    });
+
+    it('should not open a fence from a marker inside a comment', () => {
+      const result = parser.parseSkillMd('# Title\n\n<!--\n```\n-->\n\nReal summary.\n');
+
+      expect(result.manifest.description).toBe('Real summary.');
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),

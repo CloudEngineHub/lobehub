@@ -157,14 +157,7 @@ export class SkillParser {
     content: string,
     options?: ParseSkillMdOptions,
   ): Record<string, unknown> {
-    // Drop complete HTML comments (single- or multi-line) first, so comment
-    // bodies can never be taken as the title or description.
-    // bodies can never be taken as the title or description. An unterminated
-    // `<!--` hides everything after it, as it does when rendered.
-    const lines = content
-      .replaceAll(/<!--[\s\S]*?-->/g, '')
-      .replace(/<!--[\s\S]*$/, '')
-      .split(/\r?\n/);
+    const lines = content.split(/\r?\n/);
     let name: string | undefined;
     let description: string | undefined;
     // Text before the H1 (a language selector, badges line, …) is only a
@@ -174,6 +167,9 @@ export class SkillParser {
     // The open fence's marker (e.g. "````"); only a compatible fence — same
     // character, at least as long — closes it, so nested snippets stay inside.
     let openFence: string | undefined;
+    // Inside an HTML comment (outside fences only): comment bodies, including
+    // multi-line and unterminated ones, can never supply the title/description.
+    let inComment = false;
 
     const flushBlock = () => {
       if (block.length > 0) {
@@ -184,7 +180,37 @@ export class SkillParser {
     };
 
     for (const rawLine of lines) {
-      const line = rawLine.trim();
+      let line = rawLine.trim();
+
+      if (!openFence) {
+        // Strip comment spans on this line, carrying an open comment across lines
+        let visible = '';
+        let rest = line;
+        while (rest) {
+          if (inComment) {
+            const end = rest.indexOf('-->');
+            if (end === -1) rest = '';
+            else {
+              inComment = false;
+              rest = rest.slice(end + 3);
+            }
+          } else {
+            const start = rest.indexOf('<!--');
+            if (start === -1) {
+              visible += rest;
+              rest = '';
+            } else {
+              visible += rest.slice(0, start);
+              inComment = true;
+              rest = rest.slice(start + 4);
+            }
+          }
+        }
+        const hadComment = visible !== line;
+        line = visible.trim();
+        // A line that held only (part of) a comment is not a blank separator
+        if (!line && hadComment) continue;
+      }
 
       const fence = /^(`{3,}|~{3,})/.exec(line)?.[1];
       if (openFence) {
