@@ -39,9 +39,11 @@ export interface MachinePaymentConfig {
    * `store`). Without it, one credential settles on every request that repeats
    * it.
    *
-   * A custom method's `verify` must reject with an mppx `PaymentError` (e.g.
+   * A method's `verify` must reject with an mppx `PaymentError` (e.g.
    * `Errors.VerificationFailedError`) to answer 402; any other throw becomes a
-   * 500 `InternalPaymentError`.
+   * 500 `InternalPaymentError`. Official methods do not always comply — Stripe
+   * throws a plain `Error` for a declined card — so wrap each method with
+   * `withPaymentRejections` (./machine-payment-rejections) before `Mppx.create()`.
    */
   mppx: MachinePaymentMppx;
   /**
