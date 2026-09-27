@@ -11,23 +11,11 @@ const bridgeBody = {
   parentOperationId: 'op_sup',
 };
 
-const memberState = {
-  host: {
-    hooks: [
-      {
-        id: 'group-member-bridge',
-        type: 'onComplete',
-        webhook: { body: bridgeBody, url: '/api/agent/webhooks/group-member-callback' },
-      },
-    ],
-  },
-  origin: {
-    agentId: 'agt_carol',
-    groupId: 'cg_team',
-    lineage: { orchestrationRole: 'member', parentOperationId: 'op_sup' },
-    scope: 'group',
-    topicId: 'tpc_1',
-  },
+const member = {
+  agentId: 'agt_carol',
+  bridge: bridgeBody,
+  groupId: 'cg_team',
+  topicId: 'tpc_1',
 };
 
 const approveParams = {
@@ -41,7 +29,7 @@ const approveParams = {
   },
 } as any;
 
-const createDeps = (state: unknown) => {
+const createDeps = (parked: unknown) => {
   const bridgeHook = { handler: vi.fn(), id: 'group-member-bridge', type: 'onComplete' };
   return {
     bridgeHook,
@@ -53,7 +41,7 @@ const createDeps = (state: unknown) => {
       findMessagePlugin: vi
         .fn()
         .mockResolvedValue({ intervention: { operationId: 'op_carol', status: 'pending' } }),
-      loadState: vi.fn().mockResolvedValue(state),
+      loadMember: vi.fn().mockResolvedValue(parked),
     },
   };
 };
@@ -63,12 +51,12 @@ const createDeps = (state: unknown) => {
 // the parked supervisor op waited on its member barrier forever.
 describe('resolveGroupMemberApprovalContinuation', () => {
   it('continues the member that parked the tool, under the supervisor op', async () => {
-    const { bridgeHook, deps } = createDeps(memberState);
+    const { bridgeHook, deps } = createDeps(member);
 
     const result = await resolveGroupMemberApprovalContinuation(deps as any, approveParams);
 
     expect(deps.findMessagePlugin).toHaveBeenCalledWith('msg_exec_script');
-    expect(deps.loadState).toHaveBeenCalledWith('op_carol');
+    expect(deps.loadMember).toHaveBeenCalledWith('op_carol');
     expect(deps.createBridgeHook).toHaveBeenCalledWith(bridgeBody);
     expect(result).toMatchObject({
       agentId: 'agt_carol',
@@ -86,10 +74,7 @@ describe('resolveGroupMemberApprovalContinuation', () => {
   });
 
   it('keeps an isolated member in its own thread', async () => {
-    const { deps } = createDeps({
-      ...memberState,
-      origin: { ...memberState.origin, threadId: 'thd_1' },
-    });
+    const { deps } = createDeps({ ...member, threadId: 'thd_1' });
 
     const result = await resolveGroupMemberApprovalContinuation(deps as any, approveParams);
 
@@ -103,10 +88,7 @@ describe('resolveGroupMemberApprovalContinuation', () => {
   // Codex P1 on #20093: the continuation used to install only the bridge, so
   // the isolation thread never ran its completion hook and stayed processing.
   it("rebuilds an isolated member's thread lifecycle hooks before the bridge", async () => {
-    const { bridgeHook, deps } = createDeps({
-      ...memberState,
-      origin: { ...memberState.origin, threadId: 'thd_1' },
-    });
+    const { bridgeHook, deps } = createDeps({ ...member, threadId: 'thd_1' });
 
     const result = await resolveGroupMemberApprovalContinuation(deps as any, approveParams);
 
@@ -115,7 +97,7 @@ describe('resolveGroupMemberApprovalContinuation', () => {
   });
 
   it('adds no thread hooks for an in_group member', async () => {
-    const { bridgeHook, deps } = createDeps(memberState);
+    const { bridgeHook, deps } = createDeps(member);
 
     const result = await resolveGroupMemberApprovalContinuation(deps as any, approveParams);
 
@@ -124,10 +106,7 @@ describe('resolveGroupMemberApprovalContinuation', () => {
   });
 
   it('leaves a non-member approval untouched', async () => {
-    const { deps } = createDeps({
-      ...memberState,
-      origin: { agentId: 'agt_sup', topicId: 'tpc_1' },
-    });
+    const { deps } = createDeps(undefined);
 
     expect(await resolveGroupMemberApprovalContinuation(deps as any, approveParams)).toBe(
       undefined,
@@ -135,7 +114,7 @@ describe('resolveGroupMemberApprovalContinuation', () => {
   });
 
   it('does not re-enter once the continuation carries hooks', async () => {
-    const { deps } = createDeps(memberState);
+    const { deps } = createDeps(member);
 
     expect(
       await resolveGroupMemberApprovalContinuation(deps as any, {
@@ -143,11 +122,11 @@ describe('resolveGroupMemberApprovalContinuation', () => {
         hooks: [{ id: 'x' }],
       }),
     ).toBe(undefined);
-    expect(deps.loadState).not.toHaveBeenCalled();
+    expect(deps.loadMember).not.toHaveBeenCalled();
   });
 
   it('ignores a call that is not an approval resume', async () => {
-    const { deps } = createDeps(memberState);
+    const { deps } = createDeps(member);
 
     expect(
       await resolveGroupMemberApprovalContinuation(

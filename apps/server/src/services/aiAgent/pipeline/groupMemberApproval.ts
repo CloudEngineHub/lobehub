@@ -1,4 +1,3 @@
-import type { AgentState } from '@lobechat/agent-runtime';
 import type { MessagePluginItem } from '@lobechat/types';
 
 import type { AgentHook } from '@/server/services/agentRuntime/hooks/types';
@@ -29,7 +28,20 @@ export interface GroupMemberApprovalDeps {
    */
   createThreadHooks: (threadId: string) => Promise<AgentHook[]>;
   findMessagePlugin: (messageId: string) => Promise<MessagePluginItem | undefined>;
-  loadState: (operationId: string) => Promise<AgentState | null>;
+  /**
+   * The parked member run's identity and completion bridge — from its runtime
+   * snapshot, or the durable copy on its operation row once the snapshot
+   * expired. Undefined when the run is not a group member.
+   */
+  loadMember: (operationId: string) => Promise<ParkedGroupMember | undefined>;
+}
+
+export interface ParkedGroupMember {
+  agentId: string;
+  bridge: GroupMemberBridgeParams;
+  groupId?: string;
+  threadId?: string;
+  topicId?: string;
 }
 
 /**
@@ -65,33 +77,34 @@ export const resolveGroupMemberApprovalContinuation = async (
     (await deps.findMessagePlugin(targetMessageId))?.intervention?.operationId;
   if (!sourceOperationId) return undefined;
 
-  const state = await deps.loadState(sourceOperationId);
-  const origin = state?.origin;
-  if (origin?.lineage?.orchestrationRole !== 'member' || !origin.agentId) return undefined;
-
-  const bridge = state?.host?.hooks?.find((hook) => hook.id === 'group-member-bridge')?.webhook
-    ?.body as GroupMemberBridgeParams | undefined;
-  if (!bridge?.parentOperationId || !bridge.anchorMessageId || !bridge.groupToolMessageId) {
+  const member = await deps.loadMember(sourceOperationId);
+  const bridge = member?.bridge;
+  if (
+    !member ||
+    !bridge?.parentOperationId ||
+    !bridge.anchorMessageId ||
+    !bridge.groupToolMessageId
+  ) {
     return undefined;
   }
 
-  const threadId = origin.threadId ?? undefined;
+  const threadId = member.threadId;
   // Same order as the original isolated start: thread hooks first, bridge last
   // so its tool-message backfill is the final write.
   const threadHooks = threadId ? await deps.createThreadHooks(threadId) : [];
 
   return {
     ...params,
-    agentId: origin.agentId,
+    agentId: member.agentId,
     appContext: {
       ...params.appContext,
-      groupId: origin.groupId ?? params.appContext?.groupId,
+      groupId: member.groupId ?? params.appContext?.groupId,
       // An isolated member runs in its own thread on the supervisor's topic and
       // must not claim the topic's running mark (see `execAgentThreadRun`).
       ...(threadId && { isolationThread: true, isSubAgent: true, threadId }),
       orchestrationRole: 'member',
       scope: 'group',
-      topicId: origin.topicId ?? params.appContext?.topicId,
+      topicId: member.topicId ?? params.appContext?.topicId,
     },
     hooks: [...threadHooks, deps.createBridgeHook(bridge)],
     parentOperationId: bridge.parentOperationId,

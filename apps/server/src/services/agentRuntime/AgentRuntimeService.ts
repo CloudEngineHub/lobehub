@@ -728,6 +728,52 @@ export class AgentRuntimeService {
   }
 
   /**
+   * The completion bridge of a group member run: from its runtime snapshot
+   * while it lives, else from the durable copy recorded on the operation row
+   * at start. Undefined for any run that is not a group member.
+   */
+  async loadGroupMemberBridge(operationId: string): Promise<
+    | {
+        agentId: string;
+        bridge: Omit<GroupActionMemberBridgeParams, 'operationId' | 'reason'>;
+        groupId?: string;
+        threadId?: string;
+        topicId?: string;
+      }
+    | undefined
+  > {
+    const state = await this.coordinator.loadAgentState(operationId);
+    if (state) {
+      const origin = state.origin;
+      const bridge = state.host?.hooks?.find((hook) => hook.id === 'group-member-bridge')?.webhook
+        ?.body as Omit<GroupActionMemberBridgeParams, 'operationId' | 'reason'> | undefined;
+      if (origin?.lineage?.orchestrationRole !== 'member' || !origin.agentId || !bridge) {
+        return undefined;
+      }
+      return {
+        agentId: origin.agentId,
+        bridge,
+        groupId: origin.groupId ?? undefined,
+        threadId: origin.threadId ?? undefined,
+        topicId: origin.topicId ?? undefined,
+      };
+    }
+
+    const row = await this.agentOperationModel.findById(operationId);
+    const bridge = (row?.metadata as Record<string, unknown> | null | undefined)
+      ?.groupMemberBridge as
+      Omit<GroupActionMemberBridgeParams, 'operationId' | 'reason'> | undefined;
+    if (!row?.agentId || !bridge) return undefined;
+    return {
+      agentId: row.agentId,
+      bridge,
+      groupId: row.chatGroupId ?? undefined,
+      threadId: row.threadId ?? undefined,
+      topicId: row.topicId ?? undefined,
+    };
+  }
+
+  /**
    * Re-enqueue a continuation whose durable state was written but whose first
    * queue delivery may have been lost with the resolving HTTP process. The
    * operation id and step index are stable, so the ordinary distributed step
@@ -1008,6 +1054,11 @@ export class AgentRuntimeService {
     // ends of the persistence lifecycle (start row here, terminal update
     // in dispatchHooks) and swallows DB errors so runtime startup is never
     // blocked.
+    // A group member's completion bridge lives in the runtime snapshot, which
+    // expires (2h). Keep a durable copy on the row so a late approval or a
+    // stop can still reach the member's supervisor (`loadGroupMemberBridge`).
+    const groupMemberBridge = hooks?.find((hook) => hook.id === 'group-member-bridge')?.webhook
+      ?.body as Omit<GroupActionMemberBridgeParams, 'operationId' | 'reason'> | undefined;
     const operationStartPersisted = await this.completionLifecycle.recordStart({
       agentId: appContext?.agentId ?? null,
       appContext: {
@@ -1024,13 +1075,14 @@ export class AgentRuntimeService {
       // Persist the Agent Signal run marker on the operation row so server-side
       // self-iteration tools can read it back (operation.metadata.agentSignal) at tool-call
       // time — the trimmed appContext above intentionally drops it.
-      ...(appContext?.agentSignal || interventionResolution
+      ...(appContext?.agentSignal || interventionResolution || groupMemberBridge
         ? {
             metadata: {
               ...(appContext?.agentSignal ? { agentSignal: appContext.agentSignal } : {}),
               ...(interventionResolution
                 ? { agentInterventionContinuation: interventionResolution }
                 : {}),
+              ...(groupMemberBridge ? { groupMemberBridge } : {}),
             },
           }
         : {}),

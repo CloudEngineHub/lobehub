@@ -540,8 +540,7 @@ export class AiAgentService {
           );
         },
         findMessagePlugin: (messageId) => this.messageModel.findMessagePlugin(messageId),
-        loadState: (operationId) =>
-          this.agentRuntimeService.loadInterventionContinuationState(operationId),
+        loadMember: (operationId) => this.agentRuntimeService.loadGroupMemberBridge(operationId),
       },
       inputParams,
     );

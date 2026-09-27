@@ -602,6 +602,36 @@ describe('AgentRuntimeService', () => {
       }
     });
 
+    // Codex P1 on #20093: the member bridge lived only in the 2h runtime
+    // snapshot, so a late approval continued the supervisor instead.
+    it("keeps a durable copy of a group member's completion bridge on the row", async () => {
+      const recordStart = vi
+        .spyOn(AgentOperationModel.prototype, 'recordStart')
+        .mockResolvedValue(undefined);
+      const bridge = {
+        anchorMessageId: 'msg-speak',
+        expectedMembers: 1,
+        groupToolMessageId: 'msg-speak',
+        mode: 'in_group',
+        onComplete: 'resume',
+        parentOperationId: 'op-supervisor',
+      };
+
+      await service.createOperation({
+        ...mockParams,
+        hooks: [
+          {
+            handler: vi.fn(),
+            id: 'group-member-bridge',
+            type: 'onComplete',
+            webhook: { body: bridge, url: '/api/agent/webhooks/group-member-callback' },
+          },
+        ],
+      } as any);
+
+      expect(recordStart.mock.calls[0][0].metadata).toMatchObject({ groupMemberBridge: bridge });
+    });
+
     it('keeps the frozen model facts on the run state but out of durable storage', async () => {
       const recordStart = vi
         .spyOn(AgentOperationModel.prototype, 'recordStart')
@@ -3074,6 +3104,68 @@ describe('AgentRuntimeService', () => {
       expect(mockQueueService.scheduleMessage).toHaveBeenCalledWith(
         expect.objectContaining({ payload: { finishAfterAsyncTool: true }, stepIndex: 4 }),
       );
+    });
+  });
+
+  describe('loadGroupMemberBridge', () => {
+    const bridge = {
+      anchorMessageId: 'msg-speak',
+      expectedMembers: 1,
+      groupToolMessageId: 'msg-speak',
+      mode: 'isolated',
+      onComplete: 'resume',
+      parentOperationId: 'op-supervisor',
+      threadId: 'thd-1',
+    };
+
+    it('reads the member and its bridge from the live runtime snapshot', async () => {
+      mockCoordinator.loadAgentState.mockResolvedValue({
+        host: { hooks: [{ id: 'group-member-bridge', webhook: { body: bridge } }] },
+        origin: {
+          agentId: 'agt-carol',
+          groupId: 'cg-1',
+          lineage: { orchestrationRole: 'member' },
+          threadId: 'thd-1',
+          topicId: 'tpc-1',
+        },
+      });
+
+      expect(await service.loadGroupMemberBridge('op-carol')).toEqual({
+        agentId: 'agt-carol',
+        bridge,
+        groupId: 'cg-1',
+        threadId: 'thd-1',
+        topicId: 'tpc-1',
+      });
+    });
+
+    it('falls back to the durable row once the snapshot has expired', async () => {
+      mockCoordinator.loadAgentState.mockResolvedValue(null);
+      vi.spyOn((service as any).agentOperationModel, 'findById').mockResolvedValue({
+        agentId: 'agt-carol',
+        chatGroupId: 'cg-1',
+        metadata: { groupMemberBridge: bridge },
+        threadId: 'thd-1',
+        topicId: 'tpc-1',
+      });
+
+      expect(await service.loadGroupMemberBridge('op-carol')).toEqual({
+        agentId: 'agt-carol',
+        bridge,
+        groupId: 'cg-1',
+        threadId: 'thd-1',
+        topicId: 'tpc-1',
+      });
+    });
+
+    it('is undefined for a run that is not a group member', async () => {
+      mockCoordinator.loadAgentState.mockResolvedValue(null);
+      vi.spyOn((service as any).agentOperationModel, 'findById').mockResolvedValue({
+        agentId: 'agt-solo',
+        metadata: {},
+      });
+
+      expect(await service.loadGroupMemberBridge('op-solo')).toBeUndefined();
     });
   });
 
