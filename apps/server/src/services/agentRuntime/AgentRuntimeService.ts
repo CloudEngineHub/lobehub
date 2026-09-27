@@ -693,6 +693,16 @@ export class AgentRuntimeService {
   }
 
   /**
+   * Whether the client that started this operation declared it handles
+   * `member_runtime_end`. An unknown or expired operation reads as `false`, so
+   * a continuation then keeps the verbatim terminal every client understands.
+   */
+  async acceptsMemberRuntimeEnd(operationId: string): Promise<boolean> {
+    const metadata = await this.coordinator.getOperationMetadata(operationId).catch(() => null);
+    return metadata?.acceptsMemberRuntimeEnd === true;
+  }
+
+  /**
    * Record whether the client still holds user messages queued behind a run.
    * Only the run's owner may flag it; an unknown or foreign operation is a
    * no-op, so a caller cannot touch another user's run by guessing its id.
@@ -1005,6 +1015,7 @@ export class AgentRuntimeService {
    */
   async createOperation(params: OperationCreationParams): Promise<OperationCreationResult> {
     const {
+      acceptsMemberRuntimeEnd,
       activeDeviceId,
       activeDeviceScope,
       operationId,
@@ -1283,6 +1294,7 @@ export class AgentRuntimeService {
       const mirrorToOperationId =
         appContext?.orchestrationRole === 'member' ? (parentOperationId ?? undefined) : undefined;
       await this.coordinator.createAgentOperation(operationId, {
+        acceptsMemberRuntimeEnd,
         agentConfig,
         // Persisted so a queue worker that never ran this op's init still
         // applies the owner-configured visitor redaction policy instead of the

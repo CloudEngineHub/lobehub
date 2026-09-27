@@ -1373,6 +1373,7 @@ export class AiAgentService {
       },
       runContext,
       {
+        acceptsMemberRuntimeEnd: params.acceptsMemberRuntimeEnd,
         approvalClaim,
         approvalSourceOperationId,
         approvalSourceToolMessageIds,
