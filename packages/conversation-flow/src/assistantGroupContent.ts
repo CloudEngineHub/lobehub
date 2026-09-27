@@ -72,6 +72,13 @@ const normalizeAuthoredContent = (content?: string | null) => {
 
 const hasTools = (block: AssistantContentBlock): boolean => !!block.tools?.length;
 
+/**
+ * A broadcast council renders members streaming in parallel. It is a visible
+ * reply surface, never workflow bookkeeping, so it stays out of the fold even
+ * while the broadcast tool is still pending on its members.
+ */
+const hasCouncil = (block: AssistantContentBlock): boolean => !!block.council?.length;
+
 const hasSubstantiveContent = (block: AssistantContentBlock): boolean =>
   !!normalizeAuthoredContent(block.content);
 
@@ -327,7 +334,8 @@ export const partitionAssistantGroupBlocks = (
     const workflowEndIndex = answerSplitIndex ?? blocks.length;
 
     for (const block of blocks.slice(firstToolIndex, workflowEndIndex)) {
-      appendWorkflowRangeBlock(segments, block, totalToolCount > 1, options.isBreakoutTool);
+      if (hasCouncil(block)) appendAnswerBlock(segments, block);
+      else appendWorkflowRangeBlock(segments, block, totalToolCount > 1, options.isBreakoutTool);
     }
 
     for (const block of blocks.slice(workflowEndIndex)) {
@@ -341,7 +349,8 @@ export const partitionAssistantGroupBlocks = (
   }
 
   for (const block of blocks.slice(firstToolIndex, lastToolIndex + 1)) {
-    appendWorkflowRangeBlock(segments, block, totalToolCount > 1, options.isBreakoutTool);
+    if (hasCouncil(block)) appendAnswerBlock(segments, block);
+    else appendWorkflowRangeBlock(segments, block, totalToolCount > 1, options.isBreakoutTool);
   }
 
   appendPostToolBlocks(segments, blocks.slice(lastToolIndex + 1));
