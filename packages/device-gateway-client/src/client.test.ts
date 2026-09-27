@@ -739,6 +739,57 @@ describe('GatewayClient', () => {
       reconnectClient.disconnect();
     });
 
+    it('stays down when another client with the same connection id takes over', async () => {
+      const replacedClient = new GatewayClient({
+        autoReconnect: true,
+        gatewayUrl: 'https://gateway.test.com',
+        token: 'tok',
+      });
+      const replacedCb = vi.fn();
+      const reconnectingCb = vi.fn();
+      replacedClient.on('replaced', replacedCb);
+      replacedClient.on('reconnecting', reconnectingCb);
+
+      replacedClient.connect();
+      await vi.advanceTimersByTimeAsync(1);
+      const sockets = mockWsInstances.length;
+
+      (replacedClient as any).handleClose(1000, Buffer.from('Replaced by new connection'));
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(replacedCb).toHaveBeenCalledTimes(1);
+      expect(reconnectingCb).not.toHaveBeenCalled();
+      expect(replacedClient.connectionStatus).toBe('disconnected');
+      // No new socket: reconnecting would knock the other client off in turn.
+      expect(mockWsInstances.length).toBe(sockets);
+
+      replacedClient.disconnect();
+    });
+
+    it('still reconnects when the takeover is its own abandoned socket', async () => {
+      const racingClient = new GatewayClient({
+        autoReconnect: true,
+        gatewayUrl: 'https://gateway.test.com',
+        token: 'tok',
+      });
+      const replacedCb = vi.fn();
+      racingClient.on('replaced', replacedCb);
+
+      racingClient.connect();
+      await vi.advanceTimersByTimeAsync(1);
+      // Abandon the socket ourselves (watchdog path) and let the retry open.
+      (racingClient as any).forceReconnect('stalled');
+      await vi.advanceTimersByTimeAsync(1_001);
+
+      // The abandoned socket reaches the gateway late and knocks the new one off.
+      (racingClient as any).handleClose(1000, Buffer.from('Replaced by new connection'));
+
+      expect(replacedCb).not.toHaveBeenCalled();
+      expect(racingClient.connectionStatus).toBe('reconnecting');
+
+      racingClient.disconnect();
+    });
+
     it('should emit disconnected when autoReconnect is false and ws closes', async () => {
       const disconnectedCb = vi.fn();
       client.on('disconnected', disconnectedCb);
