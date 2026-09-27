@@ -78,6 +78,12 @@ import type {
 const log = debug('lobe-server:ai-agent-service');
 
 /**
+ * Deadline for a group member run when the tool call names none — the same
+ * 30 minutes `executeAgentTask(s)` document as their default.
+ */
+const DEFAULT_GROUP_MEMBER_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
  * AI Agent Service
  *
  * Encapsulates agent execution logic that can be triggered via:
@@ -1542,25 +1548,12 @@ export class AiAgentService {
           // resume through the group bridge (its own timeout), not the sub-agent one.
           orchestrationRole: 'member',
           resumeParentOnComplete: true,
+          userInterventionConfig: params.userInterventionConfig,
         },
       );
 
-      // Enforce the requested timeout: if the member op is still running when the
-      // deadline passes, the watchdog interrupts it and bridges a `timeout`
-      // completion so the supervisor doesn't stay parked indefinitely.
-      if (result.success && result.operationId && params.timeout && params.timeout > 0) {
-        await this.agentRuntimeService.scheduleGroupMemberTimeout(
-          {
-            anchorMessageId: params.anchorMessageId,
-            expectedMembers: params.expectedMembers,
-            groupToolMessageId: params.groupToolMessageId,
-            memberOperationId: result.operationId,
-            mode: 'isolated',
-            onComplete: params.onComplete,
-            parentOperationId: params.parentOperationId,
-          },
-          params.timeout,
-        );
+      if (result.success && result.operationId) {
+        await this.scheduleGroupMemberTimeout(params, result.operationId);
       }
 
       return {
@@ -1571,7 +1564,41 @@ export class AiAgentService {
       };
     }
 
-    return execAgentMember(this.subAgentRunDeps, params);
+    const result = await execAgentMember(this.subAgentRunDeps, params);
+    // In-group members get the same watchdog: without it a hung member kept the
+    // supervisor parked until the model layer's own timeout and retries ran out
+    // (up to 6 × 5 minutes).
+    if (result.started && result.operationId) {
+      await this.scheduleGroupMemberTimeout(params, result.operationId);
+    }
+    return result;
+  };
+
+  /**
+   * Enforce a member's deadline: if the member op is still running when it
+   * passes, the watchdog interrupts it and bridges a `timeout` completion so
+   * the supervisor doesn't stay parked indefinitely. The tool-supplied timeout
+   * wins; otherwise the documented task default applies.
+   */
+  private scheduleGroupMemberTimeout = async (
+    params: ExecGroupMemberParams,
+    memberOperationId: string,
+  ) => {
+    const timeout =
+      params.timeout && params.timeout > 0 ? params.timeout : DEFAULT_GROUP_MEMBER_TIMEOUT_MS;
+
+    await this.agentRuntimeService.scheduleGroupMemberTimeout(
+      {
+        anchorMessageId: params.anchorMessageId,
+        expectedMembers: params.expectedMembers,
+        groupToolMessageId: params.groupToolMessageId,
+        memberOperationId,
+        mode: params.mode,
+        onComplete: params.onComplete,
+        parentOperationId: params.parentOperationId,
+      },
+      timeout,
+    );
   };
 
   /**
