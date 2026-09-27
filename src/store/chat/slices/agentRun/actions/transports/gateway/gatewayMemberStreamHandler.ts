@@ -37,10 +37,10 @@ export interface GatewayMemberStreamHandlerParams {
    */
   parentOperationId?: string;
   /**
-   * Re-read the group tree unconditionally (not memoized). Used when a member
-   * parks on a human approval: the supervisor keeps waiting on it, so no
-   * terminal refetch comes, and the pending tool row (the approval card) only
-   * lands with a read of its own.
+   * Re-read the group tree unconditionally (not memoized; rejects on failure so
+   * the caller can retry). Used when a member parks on a human approval: the
+   * supervisor keeps waiting on it, so no terminal refetch comes, and the
+   * pending tool row (the approval card) only lands with a read of its own.
    */
   refreshGroup: () => Promise<void>;
 }
@@ -66,12 +66,32 @@ export interface GatewayMemberStreamHandlerParams {
  * dispatch the full accumulated content (not deltas), any chunk that lands
  * before hydration completes is repainted once the row exists — self-healing.
  */
+const APPROVAL_REFRESH_ATTEMPTS = 3;
+const APPROVAL_REFRESH_BASE_DELAY_MS = 500;
+
 export const createGatewayMemberStreamHandler = (
   get: () => ChatStore,
   params: GatewayMemberStreamHandlerParams,
 ): ((event: AgentStreamEvent) => void) => {
   const { context, ensureGroupHydrated, memberOperationId, parentOperationId, refreshGroup } =
     params;
+
+  // A failed read would leave the parked turn without its approval card and
+  // nothing else to fetch it until a focus or reload, so retry with backoff.
+  const refreshApprovalWithRetry = async () => {
+    for (let attempt = 0; attempt < APPROVAL_REFRESH_ATTEMPTS; attempt += 1) {
+      try {
+        await refreshGroup();
+        return;
+      } catch {
+        if (attempt < APPROVAL_REFRESH_ATTEMPTS - 1) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, APPROVAL_REFRESH_BASE_DELAY_MS * 2 ** attempt),
+          );
+        }
+      }
+    }
+  };
 
   const bucketKey = messageMapKey({
     agentId: context.agentId ?? '',
@@ -192,7 +212,7 @@ export const createGatewayMemberStreamHandler = (
           // Chained after the stream_start hydration: both reads replace the
           // whole bucket, so an older in-flight snapshot landing last would
           // drop the pending row again.
-          void ensureGroupHydrated().then(() => refreshGroup());
+          void ensureGroupHydrated().then(refreshApprovalWithRetry);
         }
         if (localOperationId) get().completeOperation(localOperationId);
         break;

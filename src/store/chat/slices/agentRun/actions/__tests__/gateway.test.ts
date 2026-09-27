@@ -1007,6 +1007,7 @@ describe('GatewayActionImpl', () => {
         vi.mocked(aiAgentService.execAgentTask).mockResolvedValue({
           ...execResult,
           agentId: 'agt_carol',
+          groupMemberContinuation: true,
           operationId: 'server-member-op',
         } as any);
         const topicSpy = vi.spyOn(topicSelectors, 'getTopicById').mockReturnValue(
@@ -1028,6 +1029,49 @@ describe('GatewayActionImpl', () => {
           },
           message: '',
           parentMessageId: 'carol-tool',
+        });
+
+        expect(disconnect).not.toHaveBeenCalledWith('server-supervisor-op');
+        expect(internalDispatchTopic).not.toHaveBeenCalledWith(
+          expect.objectContaining({
+            value: expect.objectContaining({
+              metadata: expect.objectContaining({
+                runningOperation: expect.objectContaining({ operationId: 'server-member-op' }),
+              }),
+            }),
+          }),
+        );
+        topicSpy.mockRestore();
+      });
+
+      // Codex P2 on #20093: the supervisor can dispatch itself as a member, so
+      // the continuation is told apart by the server's flag, not by agent ids.
+      it("keeps the supervisor's marker when the continued member is the supervisor itself", async () => {
+        const { action, internalDispatchTopic } = createExecuteTestAction();
+        vi.mocked(aiAgentService.execAgentTask).mockResolvedValue({
+          ...execResult,
+          groupMemberContinuation: true,
+          operationId: 'server-member-op',
+        } as any);
+        const topicSpy = vi.spyOn(topicSelectors, 'getTopicById').mockReturnValue(
+          () =>
+            ({
+              id: 'topic-1',
+              metadata: { runningOperation: { operationId: 'server-supervisor-op' } },
+            }) as any,
+        );
+        const disconnect = vi.spyOn(action, 'disconnectFromGateway');
+
+        await action.executeGatewayAgent({
+          context: {
+            agentId: 'agt_sup',
+            groupId,
+            scope: 'group',
+            threadId: null,
+            topicId: 'topic-1',
+          },
+          message: '',
+          parentMessageId: 'sup-self-tool',
         });
 
         expect(disconnect).not.toHaveBeenCalledWith('server-supervisor-op');
@@ -1075,6 +1119,7 @@ describe('GatewayActionImpl', () => {
         vi.mocked(aiAgentService.execAgentTask).mockResolvedValue({
           ...execResult,
           agentId: 'agt_carol',
+          groupMemberContinuation: true,
           operationId: 'server-member-op',
         } as any);
         (action as any).clearLocalRunningOperation = vi.fn();

@@ -550,7 +550,7 @@ export class AiAgentService {
         memberContinuation.agentId,
         memberContinuation.parentOperationId,
       );
-      return this.execAgent(memberContinuation);
+      return { ...(await this.execAgent(memberContinuation)), groupMemberContinuation: true };
     }
 
     // Creating the thread here (rather than inside the turn) means a run that

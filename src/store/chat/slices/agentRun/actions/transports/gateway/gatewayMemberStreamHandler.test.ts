@@ -135,6 +135,20 @@ describe('createGatewayMemberStreamHandler', () => {
       await vi.waitFor(() => expect(refreshGroup).toHaveBeenCalledTimes(1));
     });
 
+    // Codex P1 on #20093: a failed approval read used to be swallowed, leaving
+    // the parked turn without its card until a reload.
+    it('retries a failed approval refresh', async () => {
+      const { handler, refreshGroup } = setup();
+      refreshGroup
+        .mockRejectedValueOnce(new Error('network'))
+        .mockRejectedValueOnce(new Error('network'))
+        .mockResolvedValue(undefined);
+
+      handler(makeEvent('agent_runtime_end', { reason: 'waiting_for_human' }));
+
+      await vi.waitFor(() => expect(refreshGroup).toHaveBeenCalledTimes(3), { timeout: 4000 });
+    });
+
     it('leaves a normal member end to the supervisor terminal refetch', () => {
       const { handler, refreshGroup } = setup();
 

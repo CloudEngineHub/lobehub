@@ -21,6 +21,7 @@ const mockThreadModel = {
 };
 
 const mockOperationFindById = vi.fn();
+const mockLoadGroupMemberBridge = vi.fn();
 const mockFindMessagePlugin = vi.fn();
 
 vi.mock('@/database/models/thread', () => ({
@@ -106,6 +107,7 @@ vi.mock('@/server/services/agentRuntime', () => ({
         operationId: 'op-123',
         success: true,
       }),
+      loadGroupMemberBridge: mockLoadGroupMemberBridge,
       scheduleGroupMemberTimeout: mockScheduleGroupMemberTimeout,
     };
   }),
@@ -209,5 +211,39 @@ describe('AiAgentService.execGroupMember', () => {
         expect.objectContaining({ userInterventionConfig: { approvalMode: 'headless' } }),
       );
     });
+  });
+
+  // Codex P2 on #20093: the client told a member continuation apart by
+  // comparing agent ids, which misfires when the supervisor dispatched itself.
+  it('flags an approval that continues a group member', async () => {
+    mockFindMessagePlugin.mockResolvedValue({
+      intervention: { operationId: 'op-carol', status: 'pending' },
+    });
+    mockLoadGroupMemberBridge.mockResolvedValue({
+      agentId: 'agt_sup',
+      bridge: {
+        anchorMessageId: 'msg-speak',
+        expectedMembers: 1,
+        groupToolMessageId: 'msg-speak',
+        mode: 'in_group',
+        onComplete: 'resume',
+        parentOperationId: 'op-sup',
+      },
+      groupId: 'group-1',
+      topicId: 'topic-1',
+    });
+    const original = service.execAgent.bind(service);
+    vi.spyOn(service, 'execAgent')
+      .mockImplementationOnce(original)
+      .mockResolvedValueOnce(execAgentResult);
+
+    const result = await service.execAgent({
+      agentId: 'agt_sup',
+      appContext: { groupId: 'group-1', topicId: 'topic-1' },
+      prompt: '',
+      resumeApproval: { decision: 'approved', parentMessageId: 'msg-tool', toolCallId: 'call-1' },
+    } as any);
+
+    expect(result).toMatchObject({ groupMemberContinuation: true });
   });
 });

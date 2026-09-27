@@ -325,6 +325,12 @@ export interface ExecAgentResult {
   /** Structured availability context when a device dispatch failed before acceptance. */
   errorData?: DeviceUnavailableErrorData;
   /**
+   * The run continues a group member's approved tool under the supervisor's
+   * run (the supervisor keeps the topic and its stream). Explicit, because the
+   * member can be the supervisor agent itself.
+   */
+  groupMemberContinuation?: boolean;
+  /**
    * External heterogeneous producer for this run. `null` explicitly denotes
    * the normal AgentRuntime path; `undefined` is reserved for rolling clients
    * talking to an older server that did not yet return this discriminator.

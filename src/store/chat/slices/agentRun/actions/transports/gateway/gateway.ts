@@ -1315,11 +1315,10 @@ export class GatewayActionImpl {
     // connection that was already established for the old operation.
     //
     // Not for an approval that continues a group member: the server runs it
-    // under the supervisor's run (the result carries the member as its agent),
-    // so the supervisor keeps the topic, and its open stream is what delivers
-    // the members' continuation and its own closing.
-    const continuesGroupMember =
-      !!executionContext.groupId && !!result.agentId && result.agentId !== executionContext.agentId;
+    // under the supervisor's run (flagged by the server; the member may be the
+    // supervisor agent itself), so the supervisor keeps the topic, and its open
+    // stream is what delivers the members' continuation and its own closing.
+    const continuesGroupMember = !!result.groupMemberContinuation;
     if (result.topicId && !continuesGroupMember) {
       const existingTopic = topicSelectors.getTopicById(result.topicId)(this.#get());
       const staleOpId = existingTopic?.metadata?.runningOperation?.operationId;
@@ -1807,16 +1806,14 @@ export class GatewayActionImpl {
     context: ConversationContext,
     parentOperationId: string,
   ): ((memberOperationId: string) => (event: AgentStreamEvent) => void) => {
+    // Rejects on failure so the approval refresh can retry.
     const refreshGroup = () =>
-      messageService
-        .getMessages(context)
-        .then((messages) => {
-          this.#get().replaceMessages(messages, { context });
-        })
-        .catch(() => {});
+      messageService.getMessages(context).then((messages) => {
+        this.#get().replaceMessages(messages, { context });
+      });
     let hydration: Promise<void> | undefined;
     const ensureGroupHydrated = () => {
-      if (!hydration) hydration = refreshGroup();
+      if (!hydration) hydration = refreshGroup().catch(() => {});
       return hydration;
     };
 
