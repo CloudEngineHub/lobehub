@@ -274,8 +274,15 @@ export class SkillParser {
     flushBlock();
     description ??= preamble;
 
-    if (description && description.length > DERIVED_DESCRIPTION_MAX_LENGTH) {
-      description = description.slice(0, DERIVED_DESCRIPTION_MAX_LENGTH - 1).trimEnd() + '…';
+    // Truncate by code point so an emoji at the boundary is never split into
+    // an unpaired surrogate.
+    const chars = description ? [...description] : [];
+    if (chars.length > DERIVED_DESCRIPTION_MAX_LENGTH) {
+      description =
+        chars
+          .slice(0, DERIVED_DESCRIPTION_MAX_LENGTH - 1)
+          .join('')
+          .trimEnd() + '…';
     }
 
     // Only fall back to the caller-supplied name when the body has real text,

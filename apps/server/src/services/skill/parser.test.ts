@@ -310,6 +310,14 @@ Some paragraph that must not become the description.`;
       }
     });
 
+    it('should not split a surrogate pair when truncating the description', () => {
+      const result = parser.parseSkillMd(`# Title\n\n${'a'.repeat(298)}😀zz\n`);
+      const description = result.manifest.description;
+
+      expect(description.endsWith('😀…')).toBe(true);
+      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(description)).toBe(false);
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),
