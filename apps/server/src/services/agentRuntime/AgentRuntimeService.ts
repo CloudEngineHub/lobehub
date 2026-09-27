@@ -71,6 +71,7 @@ import {
 import { type IStreamEventManager } from '@/server/modules/AgentRuntime/types';
 import { emitAgentSignalSourceEvent } from '@/server/services/agentSignal';
 import { toAgentSignalTraceEvents } from '@/server/services/agentSignal/observability/traceEvents';
+import { STOPPED_TOOL_CONTENT } from '@/server/services/aiAgent/helpers/agentFactory';
 import { FileService } from '@/server/services/file';
 import { mcpService } from '@/server/services/mcp';
 import { MessageService } from '@/server/services/message';
@@ -646,10 +647,17 @@ export class AgentRuntimeService {
       );
     }
 
-    if (state.status === 'done' || state.status === 'error' || state.status === 'interrupted') {
+    if (state.status === 'done' || state.status === 'error') {
       // A retried stop must be able to settle a stale running task-topic without
       // overwriting the original completion outcome or emitting another stop.
       return true;
+    }
+
+    if (state.status === 'interrupted') {
+      // Same, but a previous stop may have failed midway through its child
+      // cascade — re-run it so the retry can still reach members / sub-agents
+      // that kept running. Children already stopped return early.
+      return this.interruptChildOperations(operationId);
     }
 
     // Sentinel FIRST: the poller and the step-boundary check read only the
@@ -682,9 +690,54 @@ export class AgentRuntimeService {
       await this.settleInterruptedParkedOperation(operationId, interruptedState);
     }
 
-    await this.interruptChildOperations(operationId);
+    // A run parked on `waiting_for_human` (e.g. a group member awaiting tool
+    // approval when its supervisor is stopped) has no step loop either. Settle
+    // it the way stopping a pending approval does, so the stale approval card
+    // cannot later start a continuation beneath the stopped parent.
+    if (state.status === 'waiting_for_human') {
+      await this.settleInterruptedApprovalPark(operationId, state);
+    }
 
-    return true;
+    return this.interruptChildOperations(operationId);
+  }
+
+  /**
+   * Abort the operation's still-pending approval rows and durably record the
+   * interruption, mirroring `InterventionController.stopPendingApproval`. The
+   * aborted rows make any later approve/reject of them fail the approval claim.
+   */
+  private async settleInterruptedApprovalPark(
+    operationId: string,
+    state: AgentState,
+  ): Promise<void> {
+    try {
+      const topicId = state.metadata?.topicId;
+      if (typeof topicId === 'string') {
+        const pendingIds = (await this.messageModel.listMessagePluginsByTopic(topicId))
+          .filter(
+            (plugin) =>
+              plugin.intervention?.operationId === operationId &&
+              plugin.intervention?.status === 'pending',
+          )
+          .map(({ id }) => id);
+
+        await this.messageModel.resolveHumanApproval(
+          pendingIds.map((id) => ({
+            content: STOPPED_TOOL_CONTENT,
+            id,
+            intervention: { status: 'aborted' },
+          })),
+        );
+      }
+
+      await this.agentOperationModel.recordCompletion(operationId, {
+        completedAt: new Date(),
+        completionReason: 'interrupted',
+        status: 'interrupted',
+      });
+    } catch (error) {
+      log('[%s] Failed to settle the interrupted approval park: %O', operationId, error);
+    }
   }
 
   private async settleInterruptedParkedOperation(
@@ -711,18 +764,34 @@ export class AgentRuntimeService {
    * Stop cascades down the operation tree: group members (in_group and
    * isolated) and `callSubAgent` children would otherwise keep calling the
    * model and writing to the conversation after the user stopped the turn.
-   * Best-effort — the parent's own interrupt already succeeded.
+   *
+   * @returns false when the cascade failed transiently, so the caller
+   * does not acknowledge the stop and a retry (which re-enters here through
+   * the parent's `interrupted` branch) can finish the cascade.
    */
-  private async interruptChildOperations(operationId: string): Promise<void> {
+  private async interruptChildOperations(operationId: string): Promise<boolean> {
+    let childIds: string[];
     try {
-      const childIds = await this.agentOperationModel.findInFlightChildOperationIds(operationId);
-      for (const childId of childIds) {
-        log('[%s] Cascading interrupt to child operation %s', operationId, childId);
-        await this.interruptOperation(childId);
-      }
+      childIds = await this.agentOperationModel.findInFlightChildOperationIds(operationId);
     } catch (error) {
-      log('[%s] Failed to cascade interrupt to child operations: %O', operationId, error);
+      log('[%s] Failed to list child operations for the stop cascade: %O', operationId, error);
+      return false;
     }
+
+    let allStopped = true;
+    for (const childId of childIds) {
+      log('[%s] Cascading interrupt to child operation %s', operationId, childId);
+      try {
+        // A `false` here means the child's runtime state is gone and cannot be
+        // confirmed either way — retrying would not change that, so only a
+        // thrown (transient) failure keeps the parent's stop unacknowledged.
+        await this.interruptOperation(childId);
+      } catch (error) {
+        log('[%s] Failed to interrupt child operation %s: %O', operationId, childId, error);
+        allStopped = false;
+      }
+    }
+    return allStopped;
   }
 
   /**

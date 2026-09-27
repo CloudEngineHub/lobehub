@@ -2434,9 +2434,13 @@ describe('AgentRuntimeService', () => {
 
   describe('interruptOperation', () => {
     let findOperation: MockInstance<AgentOperationModel['findById']>;
+    let findChildren: MockInstance<AgentOperationModel['findInFlightChildOperationIds']>;
 
     beforeEach(() => {
       findOperation = vi.spyOn(AgentOperationModel.prototype, 'findById');
+      findChildren = vi
+        .spyOn(AgentOperationModel.prototype, 'findInFlightChildOperationIds')
+        .mockResolvedValue([]);
       mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
@@ -2446,6 +2450,7 @@ describe('AgentRuntimeService', () => {
 
     afterEach(() => {
       findOperation.mockRestore();
+      findChildren.mockRestore();
     });
 
     it('should interrupt a running operation', async () => {
@@ -2557,13 +2562,12 @@ describe('AgentRuntimeService', () => {
     // G-04: stopping a supervisor parked on its members must stop the members
     // too, and settle the supervisor itself (no step loop is left to do it).
     describe('cascade to group members', () => {
-      let findChildren: MockInstance<AgentOperationModel['findInFlightChildOperationIds']>;
       let dispatchHooks: MockInstance;
 
       beforeEach(() => {
-        findChildren = vi
-          .spyOn(AgentOperationModel.prototype, 'findInFlightChildOperationIds')
-          .mockImplementation(async (id) => (id === 'op-sup' ? ['op-carol', 'op-dave'] : []));
+        findChildren.mockImplementation(async (id) =>
+          id === 'op-sup' ? ['op-carol', 'op-dave'] : [],
+        );
         dispatchHooks = vi
           .spyOn((service as any).completionLifecycle, 'dispatchHooks')
           .mockResolvedValue(undefined);
@@ -2571,7 +2575,6 @@ describe('AgentRuntimeService', () => {
       });
 
       afterEach(() => {
-        findChildren.mockRestore();
         dispatchHooks.mockRestore();
       });
 
@@ -2612,13 +2615,81 @@ describe('AgentRuntimeService', () => {
         expect(dispatchHooks).toHaveBeenCalledTimes(1);
       });
 
-      it('still stops the parent when listing the children fails', async () => {
+      it('stops the parent but does not acknowledge the stop when listing the children fails', async () => {
         findChildren.mockRejectedValue(new Error('db down'));
         mockCoordinator.loadAgentState.mockResolvedValue({ status: 'running' });
 
-        expect(await service.interruptOperation('op-sup')).toBe(true);
+        expect(await service.interruptOperation('op-sup')).toBe(false);
         expect(mockCoordinator.markInterrupted).toHaveBeenCalledWith('op-sup');
         expect(dispatchHooks).not.toHaveBeenCalled();
+      });
+
+      it('lets a retried stop finish a child cascade that failed the first time', async () => {
+        const states: Record<string, any> = {
+          'op-carol': { metadata: { topicId: 'tpc-1' }, status: 'running' },
+          'op-dave': { metadata: { topicId: 'tpc-1' }, status: 'running' },
+          'op-sup': { metadata: { topicId: 'tpc-1' }, status: 'running' },
+        };
+        mockCoordinator.loadAgentState.mockImplementation(async (id: string) => states[id]);
+        mockCoordinator.saveAgentState.mockImplementation(async (id: string, next: any) => {
+          states[id] = next;
+        });
+        findChildren.mockRejectedValueOnce(new Error('db blip'));
+
+        // First stop: the parent is interrupted, the cascade fails transiently.
+        expect(await service.interruptOperation('op-sup')).toBe(false);
+        expect(states['op-sup'].status).toBe('interrupted');
+        expect(states['op-carol'].status).toBe('running');
+
+        // The retry must not short-circuit on the parent's interrupted state.
+        expect(await service.interruptOperation('op-sup')).toBe(true);
+        expect(states['op-carol'].status).toBe('interrupted');
+        expect(states['op-dave'].status).toBe('interrupted');
+      });
+
+      it('settles a member parked on approval so its stale approval cannot resume it', async () => {
+        const states: Record<string, any> = {
+          'op-carol': { metadata: { topicId: 'tpc-1' }, status: 'waiting_for_human' },
+          'op-dave': { metadata: { topicId: 'tpc-1' }, status: 'running' },
+          'op-sup': { metadata: { topicId: 'tpc-1' }, status: 'waiting_for_async_tool' },
+        };
+        mockCoordinator.loadAgentState.mockImplementation(async (id: string) => states[id]);
+        const listPlugins = vi.fn().mockResolvedValue([
+          { id: 'msg-carol-tool', intervention: { operationId: 'op-carol', status: 'pending' } },
+          { id: 'msg-carol-done', intervention: { operationId: 'op-carol', status: 'approved' } },
+          { id: 'msg-other', intervention: { operationId: 'op-other', status: 'pending' } },
+        ]);
+        const resolveApproval = vi.fn().mockResolvedValue('applied');
+        Object.assign((service as any).messageModel, {
+          listMessagePluginsByTopic: listPlugins,
+          resolveHumanApproval: resolveApproval,
+        });
+        const recordCompletion = vi
+          .spyOn(AgentOperationModel.prototype, 'recordCompletion')
+          .mockResolvedValue(undefined as any);
+
+        try {
+          expect(await service.interruptOperation('op-sup')).toBe(true);
+
+          // Only the parked member's still-pending row is aborted...
+          expect(listPlugins).toHaveBeenCalledWith('tpc-1');
+          expect(resolveApproval).toHaveBeenCalledTimes(1);
+          expect(resolveApproval).toHaveBeenCalledWith([
+            {
+              content: 'Tool execution was aborted by user.',
+              id: 'msg-carol-tool',
+              intervention: { status: 'aborted' },
+            },
+          ]);
+          // ...and its durable operation leaves waiting_for_human.
+          expect(recordCompletion).toHaveBeenCalledWith(
+            'op-carol',
+            expect.objectContaining({ completionReason: 'interrupted', status: 'interrupted' }),
+          );
+          expect(recordCompletion).not.toHaveBeenCalledWith('op-dave', expect.anything());
+        } finally {
+          recordCompletion.mockRestore();
+        }
       });
     });
 
