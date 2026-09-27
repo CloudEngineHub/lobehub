@@ -213,6 +213,7 @@ export class ExpertiseModel {
           createdAt: expertiseLessons.createdAt,
           createdByUserId: expertiseLessons.createdByUserId,
           domainId: expertiseLessons.domainId,
+          originRunId: expertiseLessons.originRunId,
           // Rows that predate the column hold null; they have only ever been reminders.
           enforcement: sql<ExpertiseEnforcement>`coalesce(${expertiseLessons.enforcement}, 'remind')`,
           exampleCount: expertiseLessons.exampleCount,
@@ -274,7 +275,15 @@ export class ExpertiseModel {
         outOfScope: domain.outOfScope,
         title: domain.title,
       },
-      rules: lessons.filter((lesson) => lesson.domainId === domain.id),
+      rules: lessons
+        .filter((lesson) => lesson.domainId === domain.id)
+        // Written by the reviewer rather than distilled from a run. Hit counts grow as a rule is
+        // applied, so provenance is read from where the row came from — same test the lesson
+        // reader uses for `taughtByUser`.
+        .map(({ originRunId, ...lesson }) => ({
+          ...lesson,
+          authored: lesson.createdByUserId != null && originRunId == null,
+        })),
       scopes: bindings
         .filter((binding) => binding.domainId === domain.id)
         .map((binding) => {
@@ -1010,18 +1019,36 @@ export class ExpertiseModel {
    * touched; an id from elsewhere is ignored rather than pulled across, because moving between
    * groups changes the code and goes through `moveRule`.
    */
-  reorderRules = async (domainId: string, lessonIds: string[]) => {
+  reorderRule = async (domainId: string, lessonId: string, beforeId: string | null) => {
     const domain = await this.findDomain(domainId);
     if (!domain) return null;
-    await this.db.transaction(async (tx) => {
-      for (const [index, lessonId] of lessonIds.entries()) {
+    return this.db.transaction(async (tx) => {
+      // The server's own order, not a list sent by the client: a stale or partial client view
+      // cannot scramble the group, and the request stays one id no matter how large it grows.
+      const rows = await tx
+        .select({ id: expertiseLessons.id, sortOrder: expertiseLessons.sortOrder })
+        .from(expertiseLessons)
+        .where(and(eq(expertiseLessons.domainId, domainId), eq(expertiseLessons.status, 'active')))
+        .orderBy(
+          sql`${expertiseLessons.sortOrder} asc nulls last`,
+          asc(expertiseLessons.createdAt),
+        );
+      if (!rows.some((row) => row.id === lessonId)) return null;
+
+      const order = rows.map((row) => row.id).filter((id) => id !== lessonId);
+      const at = beforeId ? order.indexOf(beforeId) : -1;
+      order.splice(at === -1 ? order.length : at, 0, lessonId);
+
+      const current = new Map(rows.map((row) => [row.id, row.sortOrder]));
+      for (const [index, id] of order.entries()) {
+        if (current.get(id) === index) continue;
         await tx
           .update(expertiseLessons)
           .set({ sortOrder: index, updatedAt: new Date() })
-          .where(and(eq(expertiseLessons.id, lessonId), eq(expertiseLessons.domainId, domainId)));
+          .where(eq(expertiseLessons.id, id));
       }
+      return { domainId, order };
     });
-    return { count: lessonIds.length, domainId };
   };
 
   /**

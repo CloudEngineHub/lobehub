@@ -57,8 +57,8 @@ class ExpertiseService {
   updateRule = async (lessonId: string, patch: UpdateRuleInput) =>
     lambdaClient.expertise.updateRule.mutate({ lessonId, ...patch });
 
-  reorderRules = async (domainId: string, lessonIds: string[]) =>
-    lambdaClient.expertise.reorderRules.mutate({ domainId, lessonIds });
+  reorderRule = async (domainId: string, lessonId: string, beforeId: string | null) =>
+    lambdaClient.expertise.reorderRule.mutate({ beforeId, domainId, lessonId });
 
   moveRule = async (lessonId: string, domainId: string) =>
     lambdaClient.expertise.moveRule.mutate({ domainId, lessonId });

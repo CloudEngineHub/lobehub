@@ -40,7 +40,7 @@ const RuleRow = ({
 }: RuleRowProps) => {
   const { t } = useTranslation('memory');
   const archived = rule.status === 'retired';
-  const authored = Boolean(rule.createdByUserId) && rule.hitCount === 0;
+  const authored = rule.authored;
 
   const archivedWhy = archivedInto
     ? t('rules.archived.mergedInto', { title: archivedInto })

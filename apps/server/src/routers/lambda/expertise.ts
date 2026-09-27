@@ -312,10 +312,13 @@ export const expertiseRouter = router({
     }),
 
   /** The order the reviewer dragged one group into. */
-  reorderRules: expertiseWriteProcedure
-    .input(z.object({ domainId: z.string(), lessonIds: z.array(z.string()).max(500) }))
+  /** Moves one rule within its group: before `beforeId`, or to the end when it is null. */
+  reorderRule: expertiseWriteProcedure
+    .input(
+      z.object({ beforeId: z.string().nullable(), domainId: z.string(), lessonId: z.string() }),
+    )
     .mutation(async ({ ctx, input }) =>
-      ctx.expertiseModel.reorderRules(input.domainId, input.lessonIds),
+      ctx.expertiseModel.reorderRule(input.domainId, input.lessonId, input.beforeId),
     ),
 
   /** Files a rule under another group. */

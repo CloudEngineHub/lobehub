@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { appendException } from './labels';
+import { appendException, findMove } from './labels';
 
 describe('appendException', () => {
   it('keeps the exceptions already written and adds the new one below', () => {
@@ -21,5 +21,22 @@ describe('appendException', () => {
     expect(appendException('图表内部的间距不算\n打印样式不算', '打印样式不算')).toBe(
       '图表内部的间距不算\n打印样式不算',
     );
+  });
+});
+
+describe('findMove', () => {
+  it('describes a drag upward as "now before" its new neighbour', () => {
+    expect(findMove(['a', 'b', 'c', 'd'], ['c', 'a', 'b', 'd'])).toEqual({
+      beforeId: 'a',
+      id: 'c',
+    });
+  });
+
+  it('describes a drag to the end with no neighbour after it', () => {
+    expect(findMove(['a', 'b', 'c'], ['b', 'c', 'a'])).toEqual({ beforeId: null, id: 'a' });
+  });
+
+  it('reports nothing when the order did not change', () => {
+    expect(findMove(['a', 'b'], ['a', 'b'])).toBeNull();
   });
 });

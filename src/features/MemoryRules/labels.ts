@@ -61,3 +61,26 @@ export const useScopeLabel = () => {
       }),
     );
 };
+
+/**
+ * The single move a drag made, as "this rule now sits before that one" (or at the end). A drag
+ * moves one row, so the rest of the order is implied and the request stays one id long.
+ */
+export const findMove = (
+  previous: string[],
+  next: string[],
+): { beforeId: string | null; id: string } | null => {
+  if (previous.length !== next.length || previous.every((id, index) => id === next[index])) {
+    return null;
+  }
+  // The moved row is the one whose neighbours changed; try each candidate against the result.
+  for (const id of next) {
+    const rest = previous.filter((other) => other !== id);
+    const at = next.indexOf(id);
+    const rebuilt = [...rest.slice(0, at), id, ...rest.slice(at)];
+    if (rebuilt.every((other, index) => other === next[index])) {
+      return { beforeId: next[at + 1] ?? null, id };
+    }
+  }
+  return null;
+};

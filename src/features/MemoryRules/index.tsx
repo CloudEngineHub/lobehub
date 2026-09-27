@@ -21,7 +21,7 @@ import DetailPanel from './DetailPanel';
 import { createGroupModal } from './GroupModal';
 import GroupSection from './GroupSection';
 import { useRules } from './hooks';
-import { mergedIntoId } from './labels';
+import { findMove, mergedIntoId } from './labels';
 import { buildRuleMenu } from './ruleMenu';
 import RuleRow from './RuleRow';
 import { styles } from './styles';
@@ -112,6 +112,14 @@ const MemoryRules = () => {
   };
 
   const reorder = async (domainId: string, items: RuleItem[]) => {
+    const previous = (groups.find((group) => group.domain.id === domainId)?.rules ?? [])
+      .filter((rule) => rule.status === 'active')
+      .map((rule) => rule.id);
+    const move = findMove(
+      previous,
+      items.map((rule) => rule.id),
+    );
+    if (!move) return;
     await mutate(
       (current) =>
         current && {
@@ -125,10 +133,7 @@ const MemoryRules = () => {
       { revalidate: false },
     );
     try {
-      await expertiseService.reorderRules(
-        domainId,
-        items.map((rule) => rule.id),
-      );
+      await expertiseService.reorderRule(domainId, move.id, move.beforeId);
       await refresh();
     } catch (error) {
       await recover(error);

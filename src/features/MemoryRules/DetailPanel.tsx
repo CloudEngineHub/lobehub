@@ -241,7 +241,7 @@ const RuleDocument = ({
   }, [rule.id, rule.title, titleEditing]);
 
   const archived = rule.status === 'retired';
-  const authored = Boolean(rule.createdByUserId) && rule.hitCount === 0;
+  const authored = rule.authored;
   const all = groups.flatMap((g) => g.rules);
   const titleOf = (id: string) => all.find((r) => r.id === id)?.title ?? id;
   const mergedInto = mergedIntoId(rule);
@@ -454,21 +454,21 @@ const RuleDocument = ({
           label={t('rules.field.why')}
           placeholder={t('rules.field.whyEmpty')}
           value={sectionBody(rule, 'why')}
-          onSave={(why) => void save({ sections: { why: why || null } })}
+          onSave={(why) => save({ sections: { why: why || null } })}
         />
         <Field
           editable={!archived}
           label={t('rules.field.how')}
           placeholder={t('rules.field.howEmpty')}
           value={sectionBody(rule, 'how')}
-          onSave={(how) => void save({ sections: { how: how || null } })}
+          onSave={(how) => save({ sections: { how: how || null } })}
         />
         <Field
           editable={!archived}
           label={t('rules.field.limits')}
           placeholder={t('rules.field.limitsEmpty')}
           value={sectionBody(rule, 'limits')}
-          onSave={(next) => void save({ sections: { limits: next || null } })}
+          onSave={(next) => save({ sections: { limits: next || null } })}
         />
         <Field
           muted
@@ -599,7 +599,8 @@ const DetailPanel = ({ code, onClose, rule, ...rest }: DetailPanelProps) => (
     minWidth={380}
     onExpandChange={(next) => !next && onClose()}
   >
-    {rule ? <RuleDocument code={code ?? ''} rule={rule} {...rest} /> : null}
+    {/* Keyed by rule: every draft in the document belongs to one rule and must not carry over. */}
+    {rule ? <RuleDocument code={code ?? ''} key={rule.id} rule={rule} {...rest} /> : null}
   </RightPanel>
 );
 

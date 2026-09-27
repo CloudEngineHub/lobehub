@@ -520,24 +520,42 @@ describe('ExpertiseModel', () => {
     expect(revisions[0]).toMatchObject({ changedBy: 'user', kind: 'user-feedback', revision: 2 });
   });
 
-  it('writes back a dragged order for one group only', async () => {
+  it("moves one rule within its group from the server's own order", async () => {
     const { first, second } = await seedRuleGroup();
     const model = new ExpertiseModel(serverDB, userId);
 
-    await model.reorderRules('rules-domain', [
-      second,
-      first,
-      '0d3e1a5c-6f52-4c2e-8f2a-9f2d3f26b103',
-    ]);
+    // Seeded order is [second, first]; move `first` to the top.
+    await model.reorderRule('rules-domain', first, second);
+    expect((await model.listRules())[0].rules.map(({ id }) => id)).toEqual([first, second]);
 
-    const [group] = await model.listRules();
-    expect(group.rules.map(({ id }) => id)).toEqual([second, first]);
-    // The foreign rule named in the list was neither moved nor touched.
+    // And back to the end.
+    await model.reorderRule('rules-domain', first, null);
+    expect((await model.listRules())[0].rules.map(({ id }) => id)).toEqual([second, first]);
+
+    // A rule from another group cannot be pulled in through this group.
+    expect(
+      await model.reorderRule('rules-domain', '0d3e1a5c-6f52-4c2e-8f2a-9f2d3f26b103', null),
+    ).toBeNull();
     const [foreign] = await serverDB
       .select({ domainId: expertiseLessons.domainId, sortOrder: expertiseLessons.sortOrder })
       .from(expertiseLessons)
       .where(eq(expertiseLessons.id, '0d3e1a5c-6f52-4c2e-8f2a-9f2d3f26b103'));
     expect(foreign).toEqual({ domainId: 'rules-foreign-domain', sortOrder: 0 });
+  });
+
+  it("keeps a hand-written rule marked as the reviewer's after it starts being hit", async () => {
+    await seedRuleGroup();
+    const model = new ExpertiseModel(serverDB, userId);
+    const created = await model.createRule({ domainId: 'rules-domain', title: '主行只留一个操作' });
+    await serverDB
+      .update(expertiseLessons)
+      .set({ hitCount: 3, hitRunCount: 2 })
+      .where(eq(expertiseLessons.id, created!.id));
+
+    const [group] = await model.listRules();
+    expect(group.rules.find((r) => r.id === created!.id)?.authored).toBe(true);
+    // Distilled rules (no author) are never marked as the reviewer's own.
+    expect(group.rules.filter((r) => r.id !== created!.id).every((r) => !r.authored)).toBe(true);
   });
 
   const seedHitOn = async (lessonId: string) => {

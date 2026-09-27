@@ -50,7 +50,8 @@ interface FieldProps {
   label: string;
   /** Rendered dimmed: a placeholder, or a value that is really the absence of one. */
   muted?: boolean;
-  onSave?: (value: string) => void;
+  /** Resolves to whether the save landed; the editor stays open with the draft when it did not. */
+  onSave?: (value: string) => Promise<boolean>;
   placeholder?: string;
   value?: string;
 }
@@ -96,9 +97,9 @@ const Field = ({ editable, label, muted, onSave, placeholder, value }: FieldProp
             <Button
               size={'small'}
               type={'primary'}
-              onClick={() => {
-                onSave?.(draft.trim());
-                setEditing(false);
+              onClick={async () => {
+                if (!onSave) return setEditing(false);
+                if (await onSave(draft.trim())) setEditing(false);
               }}
             >
               {t('rules.field.save')}
