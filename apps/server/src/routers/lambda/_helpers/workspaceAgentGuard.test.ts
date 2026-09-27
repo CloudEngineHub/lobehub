@@ -41,6 +41,46 @@ describe('assertCanUseWorkspaceAgent', () => {
     expect(assertActionMock).not.toHaveBeenCalled();
   });
 
+  // G-22: personal space skipped every check, so a forged `appContext.groupId`
+  // stamped another user's group (and the supervisor role) onto the caller's
+  // topic and messages.
+  describe('group context outside a workspace', () => {
+    const createPersonalDB = (ownGroup: { id: string } | undefined) => {
+      const findGroup = vi.fn().mockResolvedValue(ownGroup);
+      return {
+        db: { query: { chatGroups: { findFirst: findGroup } } } as unknown as LobeChatDatabase,
+        findGroup,
+      };
+    };
+
+    it('rejects a group the caller does not own', async () => {
+      const { db, findGroup } = createPersonalDB(undefined);
+
+      await expect(
+        assertCanUseWorkspaceAgent({
+          agentId: 'agt_mine',
+          db,
+          groupId: 'cg_someone_else',
+          userId: 'user-b',
+        }),
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission to use this resource',
+      });
+      expect(findGroup).toHaveBeenCalledOnce();
+    });
+
+    it('allows the caller’s own personal group', async () => {
+      const { db, findGroup } = createPersonalDB({ id: 'cg_mine' });
+
+      await expect(
+        assertCanUseWorkspaceAgent({ agentId: 'agt_mine', db, groupId: 'cg_mine', userId: 'u' }),
+      ).resolves.toBeUndefined();
+      expect(findGroup).toHaveBeenCalledOnce();
+      expect(assertActionMock).not.toHaveBeenCalled();
+    });
+  });
+
   it('checks only the agent for a standalone workspace agent', async () => {
     const { db, findFirst } = createDB({ id: 'agent-1' });
 
