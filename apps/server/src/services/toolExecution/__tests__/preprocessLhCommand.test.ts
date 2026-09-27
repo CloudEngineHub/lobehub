@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -39,6 +39,9 @@ const wrap = (command: string, extraEnv = '') =>
     '__LOBEHUB_LH_SHIM__',
     '(',
     command,
+    '__lobehub_lh_status=$?',
+    'wait',
+    'exit "$__lobehub_lh_status"',
     ')',
   ].join('\n');
 
@@ -221,6 +224,22 @@ describe('preprocessLhCommand in a real shell', () => {
 
     expect(error).toMatchObject({ status: 3 });
     const [dir] = (error as { stdout: string }).stdout.split('\n');
+    expect(dir).not.toBe('');
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  // Regression: removing the wrapper on exit raced a backgrounded `lh`, which
+  // then ran the unauthenticated global `lh` (or failed to open the wrapper).
+  it('keeps the wrapper for an lh started in the background after the script ends', async () => {
+    const out = path.join(fakeBin, 'background.out');
+    await run(`(sleep 1; lh whoami > '${out}') &`);
+
+    expect(readFileSync(out, 'utf8')).toBe('cli jwt=mock-jwt-token\n');
+  });
+
+  it('removes the wrapper once the background job has finished', async () => {
+    const dir = await run(`(sleep 1; lh whoami >/dev/null) & printf %s "$__lobehub_lh_bin"`);
+
     expect(dir).not.toBe('');
     expect(existsSync(dir)).toBe(false);
   });

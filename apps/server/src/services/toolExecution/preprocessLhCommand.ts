@@ -89,6 +89,7 @@ export const buildDeviceLhEnv = (
 /** Shell variable holding the per-command directory the `lh` wrapper is written to. */
 const LH_SHIM_DIR_VAR = '__lobehub_lh_bin';
 const LH_SHIM_EOF = '__LOBEHUB_LH_SHIM__';
+const LH_STATUS_VAR = '__lobehub_lh_status';
 
 /** POSIX single-quoting, safe for any value including quotes and newlines. */
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", String.raw`'\''`)}'`;
@@ -127,7 +128,11 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", St
  * The sandbox session outlives the command, so the wrapper must not: the EXIT
  * trap deletes it once the script ends, and the command runs in a subshell so
  * its own `trap` or `exit` cannot skip that cleanup. A later command in the
- * same sandbox finds no token on disk.
+ * same sandbox finds no token on disk. Before the cleanup the subshell waits
+ * for the jobs the command left in the background, so `nohup lh … &` or
+ * `(sleep 5; lh …) &` still find the wrapper; the Market runner already waits
+ * for those before returning, so this adds no latency there. A job detached
+ * further (`( lh … & )`, `disown`) is not waited on and may lose the race.
  *
  * `LOBEHUB_WORKSPACE_ID` is what keeps a workspace run's CLI calls in the
  * workspace: without it the CLI resolves to personal scope and a workspace
@@ -203,9 +208,13 @@ export const preprocessLhCommand = async (
       `${envAssignments} exec npx -y @lobehub/cli "$@"`,
       LH_SHIM_EOF,
       // A subshell, so the command's own `trap … EXIT` or `exit` cannot skip the
-      // cleanup; its exit status is still the script's.
+      // cleanup; it waits for background jobs that may still exec `lh`, then
+      // exits with the command's own status.
       '(',
       command,
+      `${LH_STATUS_VAR}=$?`,
+      'wait',
+      `exit "$${LH_STATUS_VAR}"`,
       ')',
     ].join('\n');
 
