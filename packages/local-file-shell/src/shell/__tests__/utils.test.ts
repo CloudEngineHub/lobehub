@@ -258,6 +258,65 @@ describe('normalizeEnvVarRefs', () => {
       const command = 'foreach ($path in Get-ChildItem) { Write-Output $path }';
       expect(normalizeEnvVarRefs(command, env, 'pwsh')).toBe(command);
     });
+
+    // Regression: a .cmd batch file written through a single-quoted here-string
+    // had its `%PATH%` rewritten to `${env:PATH}`, which PowerShell then wrote
+    // to disk verbatim — the batch file lost its PATH.
+    it('should leave %VAR% inside a single-quoted here-string verbatim', () => {
+      const command = [
+        "$dsh = @'",
+        '@echo off',
+        'set "DSH_HOME=%USERPROFILE%\\.dsh"',
+        'set "PATH=D:\\DeepSeekHarness\\npm-global;%PATH%"',
+        '\'@; [IO.File]::WriteAllText("$env:TEMP\\dsh.cmd", $dsh)',
+        'Write-Output "%USERPROFILE%"',
+      ].join('\r\n');
+
+      expect(normalizeEnvVarRefs(command, env, 'pwsh')).toBe(
+        [
+          "$dsh = @'",
+          '@echo off',
+          'set "DSH_HOME=%USERPROFILE%\\.dsh"',
+          'set "PATH=D:\\DeepSeekHarness\\npm-global;%PATH%"',
+          '\'@; [IO.File]::WriteAllText("$env:TEMP\\dsh.cmd", $dsh)',
+          'Write-Output "${env:USERPROFILE}"',
+        ].join('\r\n'),
+      );
+    });
+
+    it('should leave %VAR% inside a double-quoted here-string verbatim', () => {
+      const command = '$bat = @"\nset "PATH=C:\\tools;%PATH%"\necho $name\n"@\necho %PATH%';
+
+      expect(normalizeEnvVarRefs(command, env, 'powershell')).toBe(
+        '$bat = @"\nset "PATH=C:\\tools;%PATH%"\necho $name\n"@\necho ${env:PATH}',
+      );
+    });
+
+    it("should leave %VAR% inside single-quoted strings verbatim ('' is an escaped quote)", () => {
+      expect(normalizeEnvVarRefs("Write-Output '%PATH%'", env, 'pwsh')).toBe(
+        "Write-Output '%PATH%'",
+      );
+      expect(
+        normalizeEnvVarRefs("Set-Content a.cmd 'it''s %PATH%'; echo %PATH%", env, 'pwsh'),
+      ).toBe("Set-Content a.cmd 'it''s %PATH%'; echo ${env:PATH}");
+    });
+
+    it('should still rewrite %VAR% in bare words and ordinary double-quoted strings', () => {
+      expect(normalizeEnvVarRefs('cd "%USERPROFILE%\\Desktop"', env, 'pwsh')).toBe(
+        'cd "${env:USERPROFILE}\\Desktop"',
+      );
+      // An apostrophe inside a double-quoted string or a comment must not open
+      // a single-quoted literal that swallows the rest of the command.
+      expect(
+        normalizeEnvVarRefs(
+          'Write-Output "it\'s here"; # don\'t\ncd %USERPROFILE%; dir "%ProgramFiles(x86)%"',
+          env,
+          'pwsh',
+        ),
+      ).toBe(
+        'Write-Output "it\'s here"; # don\'t\ncd ${env:USERPROFILE}; dir "${env:ProgramFiles(x86)}"',
+      );
+    });
   });
 
   describe('cmd target (fallback)', () => {

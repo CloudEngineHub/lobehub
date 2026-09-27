@@ -296,6 +296,107 @@ export const getShellInfo = async (): Promise<ShellInfo> =>
     : { displayName: '/bin/sh', path: '/bin/sh', type: 'sh' };
 
 /**
+ * Locate the spans of a PowerShell script whose text PowerShell takes
+ * literally with respect to cmd-style `%VAR%`: single-quoted strings (`''` is
+ * an escaped quote), single- and double-quoted here-strings, and comments.
+ * Returns sorted, non-overlapping `[start, end)` ranges.
+ *
+ * Ordinary double-quoted strings are scanned over (so an apostrophe inside
+ * `"it's"` does not open a single-quoted string) but not reported: `%VAR%`
+ * inside them is still a reference the author expected to expand. This is a
+ * lexer-grade approximation, not a parser — an unterminated literal extends to
+ * the end of the script, which errs on the side of leaving text untouched.
+ */
+const findPowerShellLiteralRanges = (script: string): Array<[number, number]> => {
+  const ranges: Array<[number, number]> = [];
+  const length = script.length;
+  let inDoubleQuoted = false;
+  let i = 0;
+
+  while (i < length) {
+    const char = script[i];
+
+    if (inDoubleQuoted) {
+      if (char === '`') {
+        i += 2;
+      } else if (char === '"' && script[i + 1] === '"') {
+        i += 2;
+      } else {
+        if (char === '"') inDoubleQuoted = false;
+        i += 1;
+      }
+      continue;
+    }
+
+    // Backtick escapes the next character (`` `' `` is a literal apostrophe).
+    if (char === '`') {
+      i += 2;
+      continue;
+    }
+
+    // Here-string: `@'` / `@"` must be followed by a line break; it closes at
+    // `'@` / `"@` at the start of a line.
+    if (char === '@' && (script[i + 1] === "'" || script[i + 1] === '"')) {
+      const quote = script[i + 1];
+      const opener = /^[\t ]*\r?\n/.exec(script.slice(i + 2));
+      if (opener) {
+        const close = script.indexOf(`\n${quote}@`, i + 2 + opener[0].length - 1);
+        const end = close === -1 ? length : close + 3;
+        ranges.push([i, end]);
+        i = end;
+        continue;
+      }
+    }
+
+    if (char === "'") {
+      let j = i + 1;
+      while (j < length) {
+        if (script[j] === "'") {
+          if (script[j + 1] === "'") {
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        j += 1;
+      }
+      const end = Math.min(j + 1, length);
+      ranges.push([i, end]);
+      i = end;
+      continue;
+    }
+
+    if (char === '"') {
+      inDoubleQuoted = true;
+      i += 1;
+      continue;
+    }
+
+    // Comments: `<# ... #>` blocks, and `#` at the start of a token to the end
+    // of the line. Skipped so an apostrophe in a comment does not swallow the
+    // code after it.
+    if (char === '<' && script[i + 1] === '#') {
+      const close = script.indexOf('#>', i + 2);
+      const end = close === -1 ? length : close + 2;
+      ranges.push([i, end]);
+      i = end;
+      continue;
+    }
+    if (char === '#' && (i === 0 || /[\s;|&(){}]/.test(script[i - 1]))) {
+      const newline = script.indexOf('\n', i);
+      const end = newline === -1 ? length : newline;
+      ranges.push([i, end]);
+      i = end;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  return ranges;
+};
+
+/**
  * Rewrite environment variable references in a command string to the **target
  * shell's native syntax**, for the syntaxes that shell cannot resolve itself.
  * The value is never inlined — the spawned process receives `env`, so the shell
@@ -307,7 +408,12 @@ export const getShellInfo = async (): Promise<ShellInfo> =>
  *   `$env:VAR`, `$VAR` and `${VAR}` are valid PowerShell syntax that PowerShell
  *   resolves itself — rewriting them here would corrupt legitimate scripts (the
  *   `$env:FOO='bar'` assignment form, or script-local variables like
- *   `foreach ($path in ...)` colliding with the `PATH` env var).
+ *   `foreach ($path in ...)` colliding with the `PATH` env var). The rewrite
+ *   applies to bare words and ordinary `"..."` strings only: single-quoted
+ *   strings (`'...'`), here-strings (`@'...'@` and `@"..."@`) and comments are
+ *   left verbatim. PowerShell never expands `%VAR%` there, and those blocks are
+ *   usually file content — e.g. a `.cmd` batch file written through a
+ *   here-string, whose `set "PATH=...;%PATH%"` must reach disk unchanged.
  * - cmd target: PowerShell/bash forms (`$env:VAR`, `${VAR}`, `$VAR`) are
  *   rewritten to `%VAR%`; existing `%VAR%` is already cmd-native.
  * - Git Bash target: cmd-style `%VAR%` and PowerShell-style `$env:VAR` are
@@ -366,9 +472,18 @@ export const normalizeEnvVarRefs = (
   if (shell === 'pwsh' || shell === 'powershell') {
     // cmd style: %VAR% — the name may contain parentheses, e.g. %ProgramFiles(x86)%.
     // `${env:VAR}` expands as a single token even when the value has spaces.
-    return command.replaceAll(/%([A-Z_][\w()]*)%/gi, (match, name: string) =>
-      envNames.has(name.toLowerCase()) ? `\${env:${name}}` : match,
-    );
+    const rewrite = (code: string): string =>
+      code.replaceAll(/%([A-Z_][\w()]*)%/gi, (match, name: string) =>
+        envNames.has(name.toLowerCase()) ? `\${env:${name}}` : match,
+      );
+
+    let result = '';
+    let cursor = 0;
+    for (const [start, end] of findPowerShellLiteralRanges(command)) {
+      result += rewrite(command.slice(cursor, start)) + command.slice(start, end);
+      cursor = end;
+    }
+    return result + rewrite(command.slice(cursor));
   }
 
   // cmd.exe target: rewrite to cmd-native %VAR%.
