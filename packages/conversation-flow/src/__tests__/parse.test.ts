@@ -1341,6 +1341,24 @@ describe('parse', () => {
         ]);
       });
 
+      it('renders every member of sequential speaks when later supervisor steps are untagged', () => {
+        // The server tags only the first supervisor step; the resumed step that
+        // issues the second speak carries no supervisor metadata.
+        const result = parse(inputs.agentGroup.serverSpeakSequentialMembers);
+
+        expect(collectRenderedIds(result.flatList)).toEqual(
+          expect.arrayContaining([
+            'msg_hKe9lJugvAMH9e2Tpi', // Carol (first speak)
+            'msg_9eRStPJLwuMGfBBsmU', // Dave (second speak)
+            'msg_u0LziNecBB2mzn3t63', // supervisor closing
+          ]),
+        );
+        const ids = result.flatList.map((m) => m.id);
+        expect(ids.indexOf('msg_9eRStPJLwuMGfBBsmU')).toBeLessThan(
+          ids.indexOf('msg_u0LziNecBB2mzn3t63'),
+        );
+      });
+
       it('renders the supervisor summary parented to the broadcast council tool', () => {
         const result = parse(inputs.agentGroup.serverBroadcastSummary);
 

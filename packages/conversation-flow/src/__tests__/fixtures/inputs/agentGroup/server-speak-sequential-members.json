@@ -1,0 +1,143 @@
+[
+  {
+    "id": "msg_JXosD4b72rzv",
+    "role": "user",
+    "content": "\\[B-04] 先 Carol 写再 Dave 审",
+    "agentId": "agt_zcGVN0WRL43q",
+    "groupId": "cg_XI2ejQSsq8Oi",
+    "metadata": {
+      "trigger": "chat"
+    },
+    "createdAt": 1790505012619,
+    "updatedAt": 1790505012619
+  },
+  {
+    "id": "msg_Gk9pvrLnLNmj",
+    "role": "assistant",
+    "content": "",
+    "parentId": "msg_JXosD4b72rzv",
+    "agentId": "agt_zcGVN0WRL43q",
+    "groupId": "cg_XI2ejQSsq8Oi",
+    "metadata": {
+      "finishType": "tool_calls",
+      "isSupervisor": true,
+      "orchestrationRole": "supervisor"
+    },
+    "tools": [
+      {
+        "id": "call_mujoaanx_10",
+        "type": "builtin",
+        "apiName": "speak",
+        "arguments": "{\"agentId\":\"agt_4Eq2lqIoGZxm\",\"instruction\":\"Draft\"}",
+        "identifier": "lobe-group-management"
+      }
+    ],
+    "createdAt": 1790505012624,
+    "updatedAt": 1790505015478
+  },
+  {
+    "id": "msg_4LEXIOlEu53f5A6xyp",
+    "role": "tool",
+    "content": "Agent agt_4Eq2lqIoGZxm responded in the group.",
+    "parentId": "msg_Gk9pvrLnLNmj",
+    "agentId": "agt_zcGVN0WRL43q",
+    "groupId": "cg_XI2ejQSsq8Oi",
+    "metadata": {},
+    "tool_call_id": "call_mujoaanx_10",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "speak",
+      "arguments": "{\"agentId\":\"agt_4Eq2lqIoGZxm\",\"instruction\":\"Draft\"}",
+      "type": "builtin"
+    },
+    "createdAt": 1790505015543,
+    "updatedAt": 1790505021376,
+    "pluginState": {
+      "status": "completed"
+    }
+  },
+  {
+    "id": "msg_hKe9lJugvAMH9e2Tpi",
+    "role": "assistant",
+    "content": "CAROL B04 draft one two three four five (req #11)",
+    "parentId": "msg_Gk9pvrLnLNmj",
+    "agentId": "agt_4Eq2lqIoGZxm",
+    "groupId": "cg_XI2ejQSsq8Oi",
+    "metadata": {
+      "finishType": "stop",
+      "orchestrationRole": "member"
+    },
+    "createdAt": 1790505015560,
+    "updatedAt": 1790505020757
+  },
+  {
+    "id": "msg_dU8PwU0YlrNzFNM0R9",
+    "role": "assistant",
+    "content": "",
+    "parentId": "msg_4LEXIOlEu53f5A6xyp",
+    "agentId": "agt_zcGVN0WRL43q",
+    "groupId": "cg_XI2ejQSsq8Oi",
+    "metadata": {
+      "finishType": "tool_calls"
+    },
+    "tools": [
+      {
+        "id": "call_mujoaanx_12",
+        "type": "builtin",
+        "apiName": "speak",
+        "arguments": "{\"agentId\":\"agt_9c2id5Jpalxv\",\"instruction\":\"Review\"}",
+        "identifier": "lobe-group-management"
+      }
+    ],
+    "createdAt": 1790505022916,
+    "updatedAt": 1790505023197
+  },
+  {
+    "id": "msg_7IQtU9wxeHlCyjJwdy",
+    "role": "tool",
+    "content": "Agent agt_9c2id5Jpalxv responded in the group.",
+    "parentId": "msg_dU8PwU0YlrNzFNM0R9",
+    "agentId": "agt_zcGVN0WRL43q",
+    "groupId": "cg_XI2ejQSsq8Oi",
+    "metadata": {},
+    "tool_call_id": "call_mujoaanx_12",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "speak",
+      "arguments": "{\"agentId\":\"agt_9c2id5Jpalxv\",\"instruction\":\"Review\"}",
+      "type": "builtin"
+    },
+    "createdAt": 1790505023248,
+    "updatedAt": 1790505028900,
+    "pluginState": {
+      "status": "completed"
+    }
+  },
+  {
+    "id": "msg_9eRStPJLwuMGfBBsmU",
+    "role": "assistant",
+    "content": "DAVE B04 review six seven eight nine ten (req #13)",
+    "parentId": "msg_dU8PwU0YlrNzFNM0R9",
+    "agentId": "agt_9c2id5Jpalxv",
+    "groupId": "cg_XI2ejQSsq8Oi",
+    "metadata": {
+      "finishType": "stop",
+      "orchestrationRole": "member"
+    },
+    "createdAt": 1790505023266,
+    "updatedAt": 1790505028772
+  },
+  {
+    "id": "msg_u0LziNecBB2mzn3t63",
+    "role": "assistant",
+    "content": "SUP B04 DONE: both spoke.",
+    "parentId": "msg_7IQtU9wxeHlCyjJwdy",
+    "agentId": "agt_zcGVN0WRL43q",
+    "groupId": "cg_XI2ejQSsq8Oi",
+    "metadata": {
+      "finishType": "stop"
+    },
+    "createdAt": 1790505030441,
+    "updatedAt": 1790505030733
+  }
+]

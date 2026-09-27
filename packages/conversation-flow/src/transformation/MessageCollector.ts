@@ -264,13 +264,15 @@ export class MessageCollector {
     // A server-runtime supervisor step parents its member replies (speak /
     // broadcast) to the supervisor assistant itself. The members render after
     // the group, and the supervisor's follow-up after them, so the chain ends here.
+    // Only the first supervisor step is tagged; a resumed step (e.g. a second
+    // speak) is recognized by its member-tagged reply instead.
     if (
-      isSupervisorMessage(currentAssistant) &&
       allMessages.some(
         (m) =>
           m.parentId === currentAssistant.id &&
           m.role === 'assistant' &&
-          m.agentId !== groupAgentId,
+          m.agentId !== groupAgentId &&
+          (isSupervisorMessage(currentAssistant) || m.metadata?.orchestrationRole === 'member'),
       )
     ) {
       return;
