@@ -9,6 +9,7 @@ import {
 import { unzip as fflateUnzip, zip as fflateZip } from 'fflate';
 import matter from 'gray-matter';
 import { sha256 } from 'js-sha256';
+import { marked, type Token, type Tokens } from 'marked';
 
 import { SkillManifestError, SkillParseError } from './errors';
 
@@ -41,15 +42,33 @@ export interface ParseZipOptions extends ParseSkillMdOptions {
   repackSkillZip?: boolean;
 }
 
-/** Inline Markdown → plain text: links keep their label, emphasis/code keep their content. */
-const toPlainText = (markdown: string): string =>
-  markdown
-    .replaceAll(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replaceAll(/`([^`]*)`/g, '$1')
-    .replaceAll(/(\*\*|__)(.+?)\1/g, '$2')
-    .replaceAll(/(?<![\w*])\*(?!\s)([^*]+)\*(?![\w*])/g, '$1')
-    .replaceAll(/\b_(?!\s)([^_]+)_\b/g, '$1')
-    .replaceAll(/~~(.+?)~~/g, '$1')
+/**
+ * Visible plain text of inline Markdown tokens: link labels, emphasis and code
+ * span contents are kept; images and inline HTML (comments, tags) are dropped.
+ */
+const inlineToPlainText = (tokens: Token[] = []): string =>
+  tokens
+    .map((token): string => {
+      switch (token.type) {
+        case 'image':
+        case 'html': {
+          return '';
+        }
+        case 'br': {
+          return ' ';
+        }
+        case 'codespan':
+        case 'escape': {
+          return (token as Tokens.Codespan).text;
+        }
+        default: {
+          const nested = (token as { tokens?: Token[] }).tokens;
+          return nested ? inlineToPlainText(nested) : ((token as { text?: string }).text ?? '');
+        }
+      }
+    })
+    .join('')
+    .replaceAll(/\s+/g, ' ')
     .trim();
 
 export class SkillParser {
@@ -168,110 +187,48 @@ export class SkillParser {
     content: string,
     options?: ParseSkillMdOptions,
   ): Record<string, unknown> {
-    const lines = content.split(/\r?\n/);
+    // Tokenize with a real Markdown lexer instead of scanning lines, so fenced
+    // and indented code, HTML blocks/comments (terminated or not), images and
+    // badges are classified exactly as they render.
     let name: string | undefined;
     let description: string | undefined;
-    // Text before the H1 (a language selector, badges line, …) is only a
-    // fallback: keep scanning so the H1 and the block after it still win.
+    // Text before the H1 (a language selector, …) is only a fallback.
     let preamble: string | undefined;
-    let block: string[] = [];
-    // The open fence's marker (e.g. "````"); only a compatible fence — same
-    // character, at least as long — closes it, so nested snippets stay inside.
-    let openFence: string | undefined;
-    // Inside an HTML comment (outside fences only): comment bodies, including
-    // multi-line and unterminated ones, can never supply the title/description.
-    let inComment = false;
 
-    const flushBlock = () => {
-      if (block.length > 0) {
-        if (name) description ??= block.join(' ');
-        else preamble ??= block.join(' ');
-      }
-      block = [];
-    };
-
-    for (const rawLine of lines) {
-      let line = rawLine.trim();
-
-      if (!openFence) {
-        // Strip comment spans on this line, carrying an open comment across lines
-        let visible = '';
-        let rest = line;
-        while (rest) {
-          if (inComment) {
-            const end = rest.indexOf('-->');
-            if (end === -1) rest = '';
-            else {
-              inComment = false;
-              rest = rest.slice(end + 3);
-            }
-          } else {
-            const start = rest.indexOf('<!--');
-            if (start === -1) {
-              visible += rest;
-              rest = '';
-            } else {
-              visible += rest.slice(0, start);
-              inComment = true;
-              rest = rest.slice(start + 4);
-            }
+    const firstText = (tokens: Token[]): string | undefined => {
+      for (const token of tokens) {
+        if (token.type === 'paragraph' || token.type === 'text') {
+          const text = inlineToPlainText((token as Tokens.Paragraph).tokens);
+          if (text) return text;
+        } else if (token.type === 'blockquote') {
+          const text = firstText((token as Tokens.Blockquote).tokens);
+          if (text) return text;
+        } else if (token.type === 'list') {
+          for (const item of (token as Tokens.List).items) {
+            const text = firstText(item.tokens);
+            if (text) return text;
           }
         }
-        const hadComment = visible !== line;
-        line = visible.trim();
-        // A line that held only (part of) a comment is not a blank separator
-        if (!line && hadComment) continue;
       }
+      return undefined;
+    };
 
-      const fence = /^(`{3,}|~{3,})/.exec(line)?.[1];
-      if (openFence) {
-        const closes =
-          fence?.[0] === openFence[0] &&
-          fence.length >= openFence.length &&
-          line.slice(fence.length).trim() === '';
-        if (closes) openFence = undefined;
-        continue;
-      }
-      if (fence) {
-        flushBlock();
-        openFence = fence;
-        continue;
-      }
-
-      if (!line) {
-        flushBlock();
+    for (const token of marked.lexer(content)) {
+      if (token.type === 'heading') {
         if (description) break;
-        continue;
-      }
-
-      const headingMarker = /^#{1,6}(?=\s)/.exec(line)?.[0];
-      if (headingMarker) {
-        flushBlock();
-        if (description) break;
-        if (!name && headingMarker === '#') {
-          // Drop optional closing hashes: `# Title #`
-          const title = toPlainText(line.slice(1).replace(/\s#+$/, ''));
-          if (title) name = title;
+        if (!name && (token as Tokens.Heading).depth === 1) {
+          name = inlineToPlainText((token as Tokens.Heading).tokens) || undefined;
         }
         continue;
       }
-
-      // Skip HTML comments / tags and horizontal rules
-      if (/^(?:<[!/a-z]|-{3,}$|\*{3,}$|_{3,}$)/i.test(line)) continue;
-      // Skip decoration-only lines: images and linked badges (`[![CI](…)](…)`)
-      const withoutImages = line
-        .replaceAll(/\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)/g, '')
-        .replaceAll(/!\[[^\]]*\]\([^)]*\)/g, '');
-      if (!withoutImages.replaceAll(/[\s|]/g, '')) continue;
-
-      // The description is shown as plain text: strip blockquote / list
-      // markers and inline Markdown, keeping the readable labels.
-      const text = toPlainText(
-        withoutImages.replace(/^(?:>\s*)+/, '').replace(/^(?:[*+-]|\d+\.)\s+/, ''),
-      );
-      if (text) block.push(text);
+      const text = firstText([token]);
+      if (!text) continue;
+      if (name) {
+        description = text;
+        break;
+      }
+      preamble ??= text;
     }
-    flushBlock();
     description ??= preamble;
 
     // Truncate by code point so an emoji at the boundary is never split into

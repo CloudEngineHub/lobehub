@@ -318,6 +318,15 @@ Some paragraph that must not become the description.`;
       expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(description)).toBe(false);
     });
 
+    it('should skip an indented code block', () => {
+      for (const indent of ['    ', '\t']) {
+        const result = parser.parseSkillMd(
+          `# Installer\n\n${indent}npm install x\n\nActual summary.\n`,
+        );
+        expect(result.manifest.description).toBe('Actual summary.');
+      }
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),
