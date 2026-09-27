@@ -7,6 +7,7 @@ import {
   Button,
   type DropdownItem,
   DropdownMenu,
+  SkeletonText,
   Tag,
   Text,
 } from '@lobehub/ui/base-ui';
@@ -230,7 +231,12 @@ const RuleDocument = ({
 }: RuleDocumentProps) => {
   const { t } = useTranslation('memory');
   const scopeLabel = useScopeLabel();
-  const { data: sources } = useRuleSources(rule.id);
+  const {
+    data: sources,
+    error: sourcesError,
+    isLoading: sourcesLoading,
+    mutate: retrySources,
+  } = useRuleSources(rule.id);
   const { data: revisions, mutate: mutateRevisions } = useRuleRevisions(rule.id);
   const [exception, setException] = useState('');
   const [titleDraft, setTitleDraft] = useState(rule.title);
@@ -479,7 +485,18 @@ const RuleDocument = ({
         <div className={styles.heading}>
           <span>{t('rules.sources.title')}</span>
         </div>
-        {sources?.length ? (
+        {/* "No sources" is only said once the list has actually come back empty; loading and a
+            failed request each say what they are, so nothing reads as lost evidence. */}
+        {sourcesLoading && !sources ? (
+          <SkeletonText rows={2} />
+        ) : sourcesError && !sources ? (
+          <Flexbox horizontal align={'center'} gap={8}>
+            <span className={styles.muted}>{t('rules.sources.loadFailed')}</span>
+            <Button size={'small'} type={'link'} onClick={() => void retrySources()}>
+              {t('rules.sources.retry')}
+            </Button>
+          </Flexbox>
+        ) : sources?.length ? (
           sources.map((source) => (
             <div className={styles.source} key={source.id}>
               <Flexbox horizontal align={'center'} gap={8} justify={'space-between'}>

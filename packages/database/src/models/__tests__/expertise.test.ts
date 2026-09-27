@@ -839,6 +839,20 @@ describe('ExpertiseModel', () => {
     expect(groups[0].domain.domainFilter).toBe('交付标准');
   });
 
+  it('keeps the edit history of a rule re-filed with its evidence', async () => {
+    const { first } = await seedRuleGroup();
+    await seedHitOn(first);
+    const model = new ExpertiseModel(serverDB, userId);
+    await model.updateRule(first, { title: '证据要拍成功路径本身' });
+
+    const moved = await model.moveRule(first, 'rules-domain-2');
+
+    expect(moved?.id).not.toBe(first);
+    expect((await model.listLessonRevisions(moved!.id)).map(({ prevTitle }) => prevTitle)).toEqual([
+      '证据要拍成功路径',
+    ]);
+  });
+
   it('folds one rule into another and archives the source with a pointer back', async () => {
     const { first, second } = await seedRuleGroup();
     const model = new ExpertiseModel(serverDB, userId);

@@ -241,8 +241,10 @@ export default {
   'rules.sources.agreed': 'you confirmed it learned this right',
   'rules.sources.authoredEmpty': 'Written by you; no rejections on record yet.',
   'rules.sources.empty': 'The rejections behind this rule are no longer reachable.',
+  'rules.sources.loadFailed': 'Could not load where this came from.',
   'rules.sources.open': 'Open',
   'rules.sources.rejected': 'you said it learned this wrong',
+  'rules.sources.retry': 'Try again',
   'rules.sources.round': 'round {{index}}',
   'rules.sources.title': 'Where it came from',
   'rules.subtitle':

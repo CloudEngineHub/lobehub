@@ -840,8 +840,23 @@ export class ExpertiseModel {
    * `feedback` is the reviewer's own sentence and `changedBy` says whether the edit came from them
    * or from the system generalizing, which is the distinction that makes the history readable.
    */
-  listLessonRevisions = async (lessonId: string, limit = 10) =>
-    this.db
+  listLessonRevisions = async (lessonId: string, limit = 10) => {
+    // A rule re-filed into another group is a copy; its earlier edits stay on the row it was
+    // copied from. Follow `salvagedFromId` back so the history reads as one rule's. Merged-in
+    // rules are not followed: their edits were to a different sentence.
+    const chain = [lessonId];
+    for (let depth = 0; depth < 16; depth += 1) {
+      const [row] = await this.db
+        .select({ salvagedFromId: expertiseLessons.salvagedFromId })
+        .from(expertiseLessons)
+        .innerJoin(expertiseDomains, eq(expertiseDomains.id, expertiseLessons.domainId))
+        .where(and(eq(expertiseLessons.id, chain.at(-1)!), this.scopeWhere()))
+        .limit(1);
+      const previous = row?.salvagedFromId;
+      if (!previous || chain.includes(previous)) break;
+      chain.push(previous);
+    }
+    return this.db
       .select({
         changedBy: expertiseLessonRevisions.changedBy,
         createdAt: expertiseLessonRevisions.createdAt,
@@ -854,9 +869,10 @@ export class ExpertiseModel {
       .from(expertiseLessonRevisions)
       .innerJoin(expertiseLessons, eq(expertiseLessons.id, expertiseLessonRevisions.lessonId))
       .innerJoin(expertiseDomains, eq(expertiseDomains.id, expertiseLessons.domainId))
-      .where(and(eq(expertiseLessonRevisions.lessonId, lessonId), this.scopeWhere()))
-      .orderBy(desc(expertiseLessonRevisions.revision))
+      .where(and(inArray(expertiseLessonRevisions.lessonId, chain), this.scopeWhere()))
+      .orderBy(desc(expertiseLessonRevisions.revision), desc(expertiseLessonRevisions.createdAt))
       .limit(limit);
+  };
 
   /** Brings a retired standard back into practice. */
   restoreLesson = async (lessonId: string) => {
