@@ -31,7 +31,7 @@ const SHELL_TOOL_NAMES = new Set(['execScript', 'runCommand']);
  *
  * `isShareVisitor` (set from `context.agentShareVisitor`, see the factory
  * below) disables the shim entirely: a share visitor's run executes under the
- * creator's identity, so the shim's `lh() { LOBEHUB_JWT=… }` prelude would
+ * creator's identity, so the shim's `LOBEHUB_JWT=…` `lh` wrapper would
  * otherwise hand a JWT scoped to the CREATOR's own account into a shell the
  * VISITOR fully controls. `lobe-cloud-sandbox` is allowlisted for share
  * visitors specifically because this shim is skipped for them — see

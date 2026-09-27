@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { buildDeviceLhEnv, isLhCommand, preprocessLhCommand } from '../preprocessLhCommand';
 
@@ -17,8 +22,17 @@ vi.mock('@/utils/env', () => ({
 }));
 
 const CREDS = "LOBEHUB_JWT='mock-jwt-token' LOBEHUB_SERVER='https://app.lobehub.com'";
-/** The shim, with credentials scoped to the `npx` process rather than exported. */
-const shim = (extraEnv = '') => `lh() { ${CREDS}${extraEnv} npx -y @lobehub/cli "$@"; }`;
+/**
+ * The shim: an `lh` executable written to a fresh `PATH` directory, with
+ * credentials scoped to the `npx` process it execs rather than exported.
+ */
+const shim = (extraEnv = '') =>
+  [
+    `__lobehub_lh_bin=$(mktemp -d) && cat > "$__lobehub_lh_bin/lh" <<'__LOBEHUB_LH_SHIM__' && chmod +x "$__lobehub_lh_bin/lh" && export PATH="$__lobehub_lh_bin:$PATH"`,
+    '#!/bin/sh',
+    `${CREDS}${extraEnv} exec npx -y @lobehub/cli "$@"`,
+    '__LOBEHUB_LH_SHIM__',
+  ].join('\n');
 
 describe('preprocessLhCommand', () => {
   it('should return unchanged command for non-lh commands', async () => {
@@ -58,17 +72,20 @@ describe('preprocessLhCommand', () => {
   // `echo $LOBEHUB_JWT` or `curl` away from exfiltration, and handed out even
   // to a script that merely mentions `lh` in quoted text, since detection is
   // deliberately permissive. Credentials must stay assignment-prefixed to the
-  // `npx` process inside the function body.
+  // `npx` process inside the `lh` wrapper.
   it('should keep credentials out of the parent shell environment', async () => {
     const result = await preprocessLhCommand('lh topic list && echo "$LOBEHUB_JWT"', 'user-1');
 
-    expect(result.command).not.toContain('export ');
+    // Only `PATH` is exported, never a credential.
+    expect(result.command.match(/export /g)).toHaveLength(1);
+    expect(result.command).toContain('export PATH=');
 
-    const [shimLine] = result.command.split('\n');
-    // The only occurrence of the token is inside the function body, prefixed to
+    const lines = result.command.split('\n');
+    // The only occurrence of the token is inside the wrapper body, prefixed to
     // `npx` — so it scopes to that one process and nothing else inherits it.
-    expect(shimLine).toMatch(/^lh\(\) \{ .*LOBEHUB_JWT='mock-jwt-token'.* npx -y @lobehub\/cli/);
-    expect(result.command.slice(shimLine.length)).not.toContain('mock-jwt-token');
+    const tokenLines = lines.filter((line) => line.includes('mock-jwt-token'));
+    expect(tokenLines).toHaveLength(1);
+    expect(tokenLines[0]).toMatch(/^LOBEHUB_JWT='mock-jwt-token'.* exec npx -y @lobehub\/cli/);
   });
 
   it('should shell-escape values containing quotes', async () => {
@@ -114,6 +131,67 @@ describe('preprocessLhCommand', () => {
   });
 });
 
+/**
+ * Runs the prepared command in a real POSIX shell, the way the sandbox does.
+ * The fake bin dir mirrors the sandbox: a global `lh` with no credentials
+ * (what the model hit before) and an `npx` that reports the credentials the
+ * CLI process actually received.
+ */
+describe('preprocessLhCommand in a real shell', () => {
+  let fakeBin: string;
+
+  beforeAll(() => {
+    fakeBin = mkdtempSync(path.join(tmpdir(), 'lh-shim-test-'));
+    const writeBin = (name: string, body: string) => {
+      const file = path.join(fakeBin, name);
+      writeFileSync(file, `#!/bin/sh\n${body}\n`);
+      chmodSync(file, 0o755);
+    };
+    writeBin('lh', `echo "No authentication found. Run 'lh login' first."`);
+    writeBin('npx', 'echo "cli jwt=${LOBEHUB_JWT:-none}"');
+  });
+
+  afterAll(() => {
+    rmSync(fakeBin, { force: true, recursive: true });
+  });
+
+  const run = async (command: string) => {
+    const { command: prepared } = await preprocessLhCommand(command, 'user-1');
+    return execFileSync('/bin/sh', ['-c', prepared], {
+      encoding: 'utf8',
+      env: { HOME: tmpdir(), PATH: `${fakeBin}:${process.env.PATH}` },
+    });
+  };
+
+  it('authenticates an lh the shell resolves itself', async () => {
+    expect(await run('lh whoami')).toBe('cli jwt=mock-jwt-token\n');
+  });
+
+  // Regression: the shim was a shell function, which only exists inside the
+  // shell that defined it. Any `lh` executed as a program — a child shell, an
+  // `env` / `timeout` / `xargs` prefix, a script's subprocess — skipped it and
+  // ran the unauthenticated global `lh` instead.
+  it.each([
+    ['a child shell', "sh -c 'lh whoami'"],
+    ['an env prefix', 'env FOO=1 lh whoami'],
+    ['xargs', 'echo whoami | xargs lh'],
+    [
+      'a node subprocess',
+      `node -e "process.stdout.write(require('child_process').execFileSync('lh', ['whoami']))"`,
+    ],
+  ])('authenticates an lh reached through %s', async (_label, command) => {
+    expect(await run(command)).toBe('cli jwt=mock-jwt-token\n');
+  });
+
+  it('keeps the token out of the script environment', async () => {
+    expect(
+      await run(
+        'lh whoami >/dev/null; echo "shell jwt=${LOBEHUB_JWT:-none}"; env | grep -c LOBEHUB_JWT || true',
+      ),
+    ).toBe('shell jwt=none\n0\n');
+  });
+});
+
 describe('isLhCommand', () => {
   // Every form below used to fall through the old
   // `/(?:^|&&|\|\||;)\s*lh(?:\s|$)/` pattern, leaving `lh` unresolved in the
@@ -147,6 +225,18 @@ describe('isLhCommand', () => {
     ['timed', 'time lh agent list'],
     ['negated and timed', '! time lh agent list'],
     ['negated with inline assignment', '! FOO=1 lh agent list'],
+    // Regression: `lh` reached through another program used to go undetected
+    // (or get a shell-function shim the child process could not see), so it
+    // ran the sandbox's own unauthenticated `lh` — "No authentication found"
+    // mid-session, which agents reported as the injected JWT vanishing.
+    ['timeout wrapper', 'echo start; timeout 120 lh doctor --json'],
+    ['loop body behind timeout', 'for i in 1 2 3; do timeout 30 lh doctor --json; done'],
+    ['child shell', "bash -c 'set -e; lh skill view skl_1 --json | jq -r .content'"],
+    ['env prefix', 'env FOO=1 lh agent list'],
+    ['nohup', 'nohup lh agent list &'],
+    ['xargs', 'echo agt_1 | xargs lh agent view'],
+    ['python subprocess', `python3 -c "import subprocess; subprocess.run(['lh', 'whoami'])"`],
+    ['node child process', "node -e \"require('child_process').execFileSync('lh', ['whoami'])\""],
   ])('detects %s', (_label, command) => {
     expect(isLhCommand(command)).toBe(true);
   });
@@ -157,8 +247,9 @@ describe('isLhCommand', () => {
     ['npm script name', 'npm run lhtest'],
     ['a local script of the same name', './lh agent list'],
     ['a path segment', 'ls /opt/lh'],
-    // `time` is matched as a whole word only.
-    ['a word merely ending in time', 'notime lh'],
+    ['a filename', 'cat lh.js'],
+    ['a hyphenated script name', 'npm run lh-sync'],
+    ['a home-relative path', '~/lh whoami'],
   ])('does not detect %s', (_label, command) => {
     expect(isLhCommand(command)).toBe(false);
   });
@@ -182,7 +273,7 @@ describe('buildDeviceLhEnv', () => {
   // device credentials' personal tenancy. The device merges env into the
   // spawned process, so setting it unconditionally is what covers these.
   it('scopes commands that reach lh indirectly, which no detector could match', () => {
-    for (const command of ["bash -lc 'lh whoami'", 'make deploy', './sync.sh', 'npm run sync']) {
+    for (const command of ['make deploy', './sync.sh', 'npm run sync']) {
       expect(isLhCommand(command)).toBe(false);
       expect(buildDeviceLhEnv('ws-1')).toEqual({ LOBEHUB_WORKSPACE_ID: 'ws-1' });
     }

@@ -19,35 +19,24 @@ export interface PreprocessResult {
 }
 
 /**
- * `lh` in shell **command position**. Matches at the start of the script or
- * right after a separator / opening construct, allowing inline `VAR=value`
- * assignments in between (`FOO=1 lh agent list`).
+ * `lh` as a standalone word anywhere in the command — not a path segment
+ * (`./lh`, `/opt/lh`), a filename (`lh.js`) or part of a longer word
+ * (`lhtest`).
  *
- * Command-position openers covered: newline, `;`, `&` (also the second `&` of
- * `&&`), `|` (also `||`), `(` (also the `(` of `$(`), `)` (a `case` arm), a
- * backtick, `{`, and the compound-command keywords. That set is what makes
- * multi-line scripts, pipelines, command substitution, subshells, loops and
- * `case` statements resolve — the previous pattern only knew `^`, `&&`, `||`
- * and `;` on a single line, so everything after the first line of a `view` →
- * `edit` script fell through unhandled.
- *
- * Between the opener and `lh` the pattern also allows the `!` and `time`
- * prefixes (`if ! lh whoami; then …`, `time lh agent list`) and inline
- * `VAR=value` assignments. `!` and `time` are the only command prefixes worth
- * matching: they are shell reserved words, so the shell still resolves `lh`
- * through the injected function. Prefixes that fork an external command —
- * `env`, `nohup`, `xargs`, and POSIX `command` / `exec`, which bypass function
- * lookup by definition — could never see a shell function anyway, so matching
- * them would inject a shim that cannot help.
+ * This used to require **shell command position**, which only covers an `lh`
+ * the invoking shell resolves itself. Models just as often reach it through
+ * another process — `timeout 60 lh …`, `bash -c '… lh …'`, `xargs lh`,
+ * `subprocess.run(["lh", …])`, `execFileSync('lh', …)` — and every one of those
+ * got no credentials, fell through to the sandbox's own unauthenticated `lh`
+ * install, and failed with "No authentication found" mid-session.
  *
  * This is a DETECTION-only heuristic: the command itself is never rewritten
- * (see `preprocessLhCommand`), so a false positive costs one harmless shim
- * while a false negative costs a broken `lh` invocation. Erring permissive is
- * therefore the right trade — e.g. `echo 'a && lh b'` matches even though the
+ * (see `preprocessLhCommand`), so a false positive costs one unused shim while
+ * a false negative costs a broken `lh` invocation. Erring permissive is
+ * therefore the right trade — e.g. `echo 'use lh'` matches even though the
  * `lh` is quoted text.
  */
-const LH_COMMAND_PATTERN =
-  /(?:^|[\n;&|()`{]|\b(?:do|then|else|if|elif|while|until)\b)[\t ]*(?:(?:!|\btime)[\t ]+)*(?:[A-Za-z_]\w*=(?:'[^']*'|"[^"]*"|[^\s'"&;|]*)[\t ]+)*lh(?=[\s;&|)]|$)/;
+const LH_COMMAND_PATTERN = /(?<![\w./~-])lh(?![\w./-])/;
 
 export const isLhCommand = (command: string): boolean => LH_COMMAND_PATTERN.test(command);
 
@@ -81,6 +70,10 @@ export const buildDeviceLhEnv = (
 ): Record<string, string> | undefined =>
   workspaceId ? { LOBEHUB_WORKSPACE_ID: workspaceId } : undefined;
 
+/** Shell variable holding the per-command directory the `lh` wrapper is written to. */
+const LH_SHIM_DIR_VAR = '__lobehub_lh_bin';
+const LH_SHIM_EOF = '__LOBEHUB_LH_SHIM__';
+
 /** POSIX single-quoting, safe for any value including quotes and newlines. */
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", String.raw`'\''`)}'`;
 
@@ -89,27 +82,29 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", St
  *
  * Instead of rewriting every `lh` occurrence (which can only ever cover the
  * shell forms the regex happens to know), the command is left **byte-identical**
- * and a one-line shim is prepended:
+ * and a prelude writes an `lh` executable into a fresh directory at the front
+ * of `PATH`:
  *
  * ```sh
- * lh() { LOBEHUB_JWT='…' LOBEHUB_SERVER='…' LOBEHUB_WORKSPACE_ID='…' npx -y @lobehub/cli "$@"; }
+ * __lobehub_lh_bin=$(mktemp -d) && cat > "$__lobehub_lh_bin/lh" <<'…' && chmod +x … && export PATH=…
+ * #!/bin/sh
+ * LOBEHUB_JWT='…' LOBEHUB_SERVER='…' LOBEHUB_WORKSPACE_ID='…' exec npx -y @lobehub/cli "$@"
+ * …
  * <original command>
  * ```
  *
- * A POSIX shell function is visible to subshells and command substitution, so
- * this resolves `lh` in every form the model can write — pipelines, `$(lh …)`,
- * `for … do lh …`, and every line of a multi-line script — while emitting the
- * JWT exactly once instead of per occurrence.
+ * It has to be an executable on `PATH`, not a shell function: a function only
+ * exists inside the shell that defined it, so `timeout 60 lh …`, `bash -c 'lh …'`,
+ * `xargs lh` or a Python/Node subprocess — all of which exec `lh` as a program —
+ * never saw it and ran the sandbox's own unauthenticated `lh` instead. `PATH`
+ * is inherited by every descendant, so each of those forms resolves the same
+ * credentialed wrapper, while the JWT is still emitted exactly once.
  *
- * The credentials are assignment-prefixed to `npx` INSIDE the function rather
+ * The credentials are assignment-prefixed to `npx` INSIDE the wrapper rather
  * than `export`ed around the script. Exporting would put a full user auth token
  * in the environment of every command the model wrote, where any later `env`,
- * `echo $LOBEHUB_JWT`, `curl` or child process could read and exfiltrate it —
- * and since detection is deliberately permissive, a script that merely mentions
- * `lh` in quoted text would get one too. Prefixing an external command is
- * well-defined POSIX and scopes the value to that one `npx` process. Nothing is
- * lost: the shim is a shell function, so it was never visible to a child shell
- * process (`sh -c 'lh …'`) that an exported variable would have reached.
+ * `echo $LOBEHUB_JWT`, `curl` or child process could read it. Only `PATH` is
+ * exported; the token stays scoped to the `npx` process the wrapper execs.
  *
  * `LOBEHUB_WORKSPACE_ID` is what keeps a workspace run's CLI calls in the
  * workspace: without it the CLI resolves to personal scope and a workspace
@@ -158,10 +153,15 @@ export const preprocessLhCommand = async (
     ].join(' ');
 
     // Newline-separated (not `;`-separated) so a command whose first line is a
-    // comment or a shebang cannot swallow the shim.
-    const finalCommand = [`lh() { ${envAssignments} npx -y @lobehub/cli "$@"; }`, command].join(
-      '\n',
-    );
+    // comment or a shebang cannot swallow the shim. The heredoc delimiter is
+    // quoted, so the wrapper body is written verbatim.
+    const finalCommand = [
+      `${LH_SHIM_DIR_VAR}=$(mktemp -d) && cat > "$${LH_SHIM_DIR_VAR}/lh" <<'${LH_SHIM_EOF}' && chmod +x "$${LH_SHIM_DIR_VAR}/lh" && export PATH="$${LH_SHIM_DIR_VAR}:$PATH"`,
+      '#!/bin/sh',
+      `${envAssignments} exec npx -y @lobehub/cli "$@"`,
+      LH_SHIM_EOF,
+      command,
+    ].join('\n');
 
     log(
       'Intercepted lh command for user %s (workspace %s), shim injected',
