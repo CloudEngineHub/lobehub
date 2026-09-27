@@ -57,6 +57,7 @@ describe('createGatewayMemberStreamHandler', () => {
       ensureGroupHydrated: vi.fn().mockResolvedValue(undefined),
       memberOperationId: 'server-member-op',
       parentOperationId: 'owner-op',
+      refreshGroup: vi.fn().mockResolvedValue(undefined),
     });
 
     handler(makeEvent('stream_start', { assistantMessage: { id: 'member-msg' } }));
@@ -78,11 +79,49 @@ describe('createGatewayMemberStreamHandler', () => {
       ensureGroupHydrated: vi.fn().mockResolvedValue(undefined),
       memberOperationId: 'server-member-op',
       parentOperationId: 'owner-op',
+      refreshGroup: vi.fn().mockResolvedValue(undefined),
     });
 
     handler(makeEvent('stream_start', { assistantMessage: { id: 'member-msg' } }));
     handler(makeEvent('visible_output_end'));
 
     expect(store.updateOperationMetadata).not.toHaveBeenCalled();
+  });
+
+  // G-05: a member parked on a human approval ends while the supervisor keeps
+  // waiting on it, so no terminal refetch ever brings its pending tool row in —
+  // without a read of its own the approval card only shows after a reload.
+  describe('member parked on a human approval', () => {
+    const setup = () => {
+      const store = createStore();
+      const refreshGroup = vi.fn().mockResolvedValue(undefined);
+      const ensureGroupHydrated = vi.fn().mockResolvedValue(undefined);
+      const handler = createGatewayMemberStreamHandler(() => store, {
+        context,
+        ensureGroupHydrated,
+        memberOperationId: 'server-member-op',
+        parentOperationId: 'owner-op',
+        refreshGroup,
+      });
+      handler(makeEvent('stream_start', { assistantMessage: { id: 'member-msg' } }));
+      return { ensureGroupHydrated, handler, refreshGroup, store };
+    };
+
+    it('re-reads the group tree so the approval card lands live (G-05)', () => {
+      const { handler, refreshGroup, store } = setup();
+
+      handler(makeEvent('agent_runtime_end', { reason: 'waiting_for_human' }));
+
+      expect(refreshGroup).toHaveBeenCalledTimes(1);
+      expect(store.completeOperation).toHaveBeenCalledWith('local-member-op');
+    });
+
+    it('leaves a normal member end to the supervisor terminal refetch', () => {
+      const { handler, refreshGroup } = setup();
+
+      handler(makeEvent('agent_runtime_end', { reason: 'completed' }));
+
+      expect(refreshGroup).not.toHaveBeenCalled();
+    });
   });
 });

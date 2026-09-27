@@ -1807,16 +1807,16 @@ export class GatewayActionImpl {
     context: ConversationContext,
     parentOperationId: string,
   ): ((memberOperationId: string) => (event: AgentStreamEvent) => void) => {
+    const refreshGroup = () =>
+      messageService
+        .getMessages(context)
+        .then((messages) => {
+          this.#get().replaceMessages(messages, { context });
+        })
+        .catch(() => {});
     let hydration: Promise<void> | undefined;
     const ensureGroupHydrated = () => {
-      if (!hydration) {
-        hydration = messageService
-          .getMessages(context)
-          .then((messages) => {
-            this.#get().replaceMessages(messages, { context });
-          })
-          .catch(() => {});
-      }
+      if (!hydration) hydration = refreshGroup();
       return hydration;
     };
 
@@ -1826,6 +1826,7 @@ export class GatewayActionImpl {
         ensureGroupHydrated,
         memberOperationId,
         parentOperationId,
+        refreshGroup,
       });
   };
 

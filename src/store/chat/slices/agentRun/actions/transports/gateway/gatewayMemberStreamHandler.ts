@@ -36,6 +36,13 @@ export interface GatewayMemberStreamHandlerParams {
    * recorded as its child for lineage.
    */
   parentOperationId?: string;
+  /**
+   * Re-read the group tree unconditionally (not memoized). Used when a member
+   * parks on a human approval: the supervisor keeps waiting on it, so no
+   * terminal refetch comes, and the pending tool row (the approval card) only
+   * lands with a read of its own.
+   */
+  refreshGroup: () => Promise<void>;
 }
 
 /**
@@ -63,7 +70,8 @@ export const createGatewayMemberStreamHandler = (
   get: () => ChatStore,
   params: GatewayMemberStreamHandlerParams,
 ): ((event: AgentStreamEvent) => void) => {
-  const { context, ensureGroupHydrated, memberOperationId, parentOperationId } = params;
+  const { context, ensureGroupHydrated, memberOperationId, parentOperationId, refreshGroup } =
+    params;
 
   const bucketKey = messageMapKey({
     agentId: context.agentId ?? '',
@@ -176,6 +184,13 @@ export const createGatewayMemberStreamHandler = (
         // The member row's final structure (tools, content, metadata) is
         // reconciled by the supervisor op's terminal refetch / council barrier.
         // This handler owns only the live text, so just retire the loading op.
+        // A member parked on a human approval is the exception (see `refreshGroup`).
+        if (
+          event.type === 'agent_runtime_end' &&
+          (event.data as { reason?: string } | undefined)?.reason === 'waiting_for_human'
+        ) {
+          void refreshGroup();
+        }
         if (localOperationId) get().completeOperation(localOperationId);
         break;
       }
