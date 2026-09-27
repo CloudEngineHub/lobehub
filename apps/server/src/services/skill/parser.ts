@@ -48,9 +48,7 @@ export interface ParseZipOptions extends ParseSkillMdOptions {
  * span contents are kept; images and inline HTML (comments, tags) are dropped.
  */
 const inlineToPlainText = (tokens: Token[] = []): string =>
-  // marked escapes inline text for HTML (`&` → `&amp;`) and keeps source
-  // entities (`&copy;`); the metadata is stored as plain text, so decode all.
-  decodeHTML(flattenInline(tokens)).replaceAll(/\s+/g, ' ').trim();
+  flattenInline(tokens).replaceAll(/\s+/g, ' ').trim();
 
 const flattenInline = (tokens: Token[]): string =>
   tokens
@@ -63,13 +61,18 @@ const flattenInline = (tokens: Token[]): string =>
         case 'br': {
           return ' ';
         }
+        // Rendered literally: a code span or a backslash escape keeps `&copy;` as typed
         case 'codespan':
         case 'escape': {
           return (token as Tokens.Codespan).text;
         }
         default: {
           const nested = (token as { tokens?: Token[] }).tokens;
-          return nested ? flattenInline(nested) : ((token as { text?: string }).text ?? '');
+          if (nested) return flattenInline(nested);
+          // Plain text is where Markdown interprets entities (`&copy;` → ©), so
+          // decode only here — the metadata is stored and shown as plain text.
+          const text = (token as { text?: string }).text ?? '';
+          return token.type === 'text' ? decodeHTML(text) : text;
         }
       }
     })

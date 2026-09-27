@@ -336,6 +336,15 @@ Some paragraph that must not become the description.`;
       expect(result.manifest.description).toBe('Fast — reliable & not "quoted" © ☺ & …');
     });
 
+    it('should keep entity text literal inside code spans and backslash escapes', () => {
+      const result = parser.parseSkillMd(
+        '# Use `&copy;` safely\n\nWrite `a &amp; b` or \\&copy; literally; &copy; renders.\n',
+      );
+
+      expect(result.manifest.name).toBe('Use &copy; safely');
+      expect(result.manifest.description).toBe('Write a &amp; b or &copy; literally; © renders.');
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),
