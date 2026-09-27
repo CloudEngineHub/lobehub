@@ -1,4 +1,3 @@
-import type { UpdateIdentityActionSchema } from '@lobechat/memory-user-memory/schemas';
 import {
   ActivityMemoryItemSchema,
   AddIdentityActionSchema,
@@ -241,7 +240,7 @@ export class MemoryExecutionRuntime {
   }
 
   async updateIdentityMemory(
-    params: z.infer<typeof UpdateIdentityActionSchema>,
+    params: z.infer<typeof UpdateIdentityToolInputSchema>,
   ): Promise<BuiltinServerRuntimeOutput> {
     if (this.isReadOnly) return READ_ONLY_RESULT;
     try {

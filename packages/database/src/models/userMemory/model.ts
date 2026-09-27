@@ -317,6 +317,12 @@ export interface UpdateIdentityEntryParams {
   identity?: IdentityEntryPayload;
   identityId: string;
   mergeStrategy?: MergeStrategyEnum;
+  /**
+   * With `replace`, only overwrite the identity fields present in `identity` and keep the
+   * rest. Tool calls send just the fields they change; the extractor sends a full identity
+   * and relies on omitted fields being cleared, so it leaves this off.
+   */
+  preserveOmittedFields?: boolean;
 }
 
 export interface ContextEntryPayload {
@@ -2416,6 +2422,14 @@ export class UserMemoryModel {
                   ? null
                   : (normalizeIdentityTypeValue(identity.type) ?? null),
           };
+
+          if (params.preserveOmittedFields) {
+            for (const key of Object.keys(identityUpdate) as (keyof typeof identityUpdate)[]) {
+              if (identity[key as keyof IdentityEntryPayload] === undefined) {
+                delete identityUpdate[key];
+              }
+            }
+          }
         } else {
           identityUpdate = merge(identityUpdate, params.identity);
 

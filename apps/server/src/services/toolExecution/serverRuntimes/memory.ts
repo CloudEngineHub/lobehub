@@ -766,6 +766,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
         identity: Object.keys(identityPayload).length > 0 ? identityPayload : undefined,
         identityId: input.id,
         mergeStrategy: input.mergeStrategy,
+        preserveOmittedFields: true,
       });
 
       if (!updated) {

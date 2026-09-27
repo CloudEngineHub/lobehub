@@ -5,7 +5,7 @@ import type {
   ExperienceMemoryItemSchema,
   PreferenceMemoryItemSchema,
   RemoveIdentityActionSchema,
-  UpdateIdentityActionSchema,
+  UpdateIdentityToolInputSchema,
 } from '@lobechat/memory-user-memory/schemas';
 import type { QueryTaxonomyOptionsResult, SearchMemoryResult } from '@lobechat/types';
 import type { z } from 'zod';
@@ -100,7 +100,7 @@ export interface AddPreferenceMemoryState {
 }
 
 // Update Identity
-export type UpdateIdentityMemoryParams = z.infer<typeof UpdateIdentityActionSchema>;
+export type UpdateIdentityMemoryParams = z.infer<typeof UpdateIdentityToolInputSchema>;
 export interface UpdateIdentityMemoryState {
   identityId?: string;
 }

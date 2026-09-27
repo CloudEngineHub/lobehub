@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { UpdateIdentityMemoryParams } from '../types';
 import { MemoryExecutionRuntime, type MemoryRuntimeService } from './index';
 
 const createService = (overrides: Partial<MemoryRuntimeService> = {}): MemoryRuntimeService =>
@@ -90,7 +91,7 @@ describe('MemoryExecutionRuntime', () => {
       const runtime = new MemoryExecutionRuntime({
         service: createService({ updateIdentityMemory }),
       });
-      const result = await runtime.updateIdentityMemory(params as never);
+      const result = await runtime.updateIdentityMemory(params as UpdateIdentityMemoryParams);
       return { result, updateIdentityMemory };
     };
 

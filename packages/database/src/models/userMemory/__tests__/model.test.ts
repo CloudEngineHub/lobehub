@@ -1472,6 +1472,38 @@ describe('UserMemoryModel', () => {
       expect(updated?.role).toBeNull();
     });
 
+    // Tool calls send only the fields they change, so replace must not null the rest.
+    it('keeps omitted identity fields on replace when preserveOmittedFields is set', async () => {
+      const { identityId } = await memoryModel.addIdentityEntry({
+        base: {},
+        identity: {
+          description: 'original desc',
+          relationship: RelationshipEnum.Self,
+          role: 'original role',
+          tags: ['maintainer', 'editor'],
+          type: IdentityTypeEnum.Professional,
+        },
+      });
+
+      const success = await memoryModel.updateIdentityEntry({
+        identity: { role: 'lead maintainer', tags: ['lead'] },
+        identityId,
+        mergeStrategy: MergeStrategyEnum.Replace,
+        preserveOmittedFields: true,
+      });
+
+      expect(success).toBe(true);
+      const updated = await serverDB.query.userMemoriesIdentities.findFirst({
+        where: eq(userMemoriesIdentities.id, identityId),
+      });
+      expect(updated?.role).toBe('lead maintainer');
+      // Replaced wholesale, not merged index by index.
+      expect(updated?.tags).toEqual(['lead']);
+      expect(updated?.description).toBe('original desc');
+      expect(updated?.relationship).toBe(RelationshipEnum.Self);
+      expect(updated?.type).toBe(IdentityTypeEnum.Professional);
+    });
+
     it('should not update other user identity', async () => {
       const otherModel = new UserMemoryModel(serverDB, otherUserId);
       const { identityId } = await otherModel.addIdentityEntry({
