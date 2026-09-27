@@ -962,6 +962,66 @@ description: A nested skill
       expect(second.skill.id).toBe(first.skill.id);
     });
 
+    // A market skill installed from the Skill Store UI / `lh skill install` is
+    // keyed by its market identifier. Older agent-tool imports of the same
+    // download URL derived a different identifier, missed that row, and failed
+    // the insert on the per-user name index with a raw "Failed query" error.
+    it('recognizes a skill already installed from the same URL under another identifier', async () => {
+      const url = 'https://market.lobehub.com/api/v1/skills/openclaw-skills-memory-setup/download';
+      mockSsrfSafeFetch.mockResolvedValue({
+        arrayBuffer: async () => new ArrayBuffer(0),
+        ok: true,
+        status: 200,
+      });
+      mockParserInstance.parseZipPackage.mockResolvedValue({
+        content: '# Memory Setup Skill',
+        manifest: { name: 'memory-setup', description: 'Configure persistent memory' },
+        resources: new Map(),
+      });
+
+      const installed = await importer.importFromUrl(
+        { url },
+        { identifier: 'openclaw-skills-memory-setup', source: 'market' },
+      );
+      const again = await importer.importFromUrl({ url });
+
+      expect(again.status).toBe('unchanged');
+      expect(again.skill.id).toBe(installed.skill.id);
+      expect(again.skill.identifier).toBe('openclaw-skills-memory-setup');
+    });
+
+    it('rejects a different skill with an installed name as a CONFLICT naming the installed one', async () => {
+      mockSsrfSafeFetch.mockResolvedValue({
+        arrayBuffer: async () => new ArrayBuffer(0),
+        ok: true,
+        status: 200,
+      });
+      mockParserInstance.parseZipPackage.mockResolvedValue({
+        content: '# Image Generation',
+        manifest: { name: 'image-generation', description: 'Generate images' },
+        resources: new Map(),
+      });
+      await importer.importFromUrl(
+        {
+          url: 'https://market.lobehub.com/api/v1/skills/zhayujie-cowagent-image-generation/download',
+        },
+        { identifier: 'zhayujie-cowagent-image-generation', source: 'market' },
+      );
+
+      const error = await importer
+        .importFromUrl(
+          {
+            url: 'https://market.lobehub.com/api/v1/skills/onyx-dot-app-onyx-image-generation/download',
+          },
+          { identifier: 'onyx-dot-app-onyx-image-generation', source: 'market' },
+        )
+        .catch((e) => e);
+
+      expect(error).toBeInstanceOf(SkillImportError);
+      expect(error.code).toBe('CONFLICT');
+      expect(error.message).toContain('zhayujie-cowagent-image-generation');
+    });
+
     it('should throw INVALID_URL error for invalid URL', async () => {
       await expect(importer.importFromUrl({ url: 'not-a-valid-url' })).rejects.toThrow(
         SkillImportError,

@@ -419,7 +419,26 @@ export class SkillImporter {
     log('importFromUrl: identifier=%s', identifier);
 
     // 5. Check for existing skill
-    const existing = await this.skillModel.findByIdentifier(identifier);
+    let existing = await this.skillModel.findByIdentifier(identifier);
+
+    // Names are unique per scope, so the same skill already installed under a
+    // different identifier would fail the insert below with a raw DB error. That
+    // happens for market skills: the Skill Store UI and `lh skill install` key
+    // them by market identifier, while older agent-tool imports keyed them by
+    // the download URL. A same-name row fetched from the same URL is this skill;
+    // any other same-name row is a real conflict the caller must resolve.
+    if (!existing) {
+      const sameName = await this.skillModel.findByName(manifest.name);
+      if (sameName) {
+        if (sameName.manifest?.sourceUrl !== input.url) {
+          throw new SkillImportError(
+            `A skill named "${manifest.name}" is already installed (identifier: ${sameName.identifier}). Use the installed skill, or delete it before importing this one.`,
+            'CONFLICT',
+          );
+        }
+        existing = sameName;
+      }
+    }
 
     // 6. Build manifest with source URL
     const fullManifest: SkillManifest = {
