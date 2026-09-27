@@ -28,6 +28,7 @@ import {
   resolveAgentDocumentsContext,
 } from '@/services/agentDocument';
 import { aiAgentService } from '@/services/aiAgent';
+import { onAgentDocumentsInvalidated } from '@/services/document/invalidation';
 import { useGlobalStore } from '@/store/global';
 import { globalGeneralSelectors } from '@/store/global/selectors';
 import type { StoreSetter } from '@/store/types';
@@ -104,6 +105,10 @@ export class AgentSliceActionImpl {
   readonly #get: () => AgentStore;
   readonly #set: Setter;
   readonly #pendingAgentDocuments = new Map<string, Promise<AgentContextDocument[] | undefined>>();
+  /** When each agent's document list was last fetched, for `maxAgeMs` freshness checks. */
+  readonly #agentDocumentsFetchedAt = new Map<string, number>();
+  /** Bumped on invalidation so a fetch already in flight cannot restore the old list. */
+  readonly #agentDocumentsGeneration = new Map<string, number>();
   readonly #updateAgentConfigControllers = new Map<string, AbortController>();
   readonly #updateAgentMetaControllers = new Map<string, AbortController>();
 
@@ -111,6 +116,7 @@ export class AgentSliceActionImpl {
     void _api;
     this.#set = set;
     this.#get = get;
+    onAgentDocumentsInvalidated((agentId) => this.invalidateAgentDocuments(agentId));
   }
 
   #createAgentScopedAbortController = (
@@ -598,32 +604,65 @@ export class AgentSliceActionImpl {
     void mutate(agentConfigKeys.available());
   };
 
+  /**
+   * Resolve the agent's context documents, cache-first.
+   *
+   * `maxAgeMs` bounds how stale a fetched list may be. The browser runtime builds
+   * `<agent_documents_index>` from this cache, so a list hydrated once per tab
+   * would keep advertising deleted docs and hide ones created elsewhere.
+   */
   ensureAgentDocuments = async (
     agentId?: string | null,
+    options: { maxAgeMs?: number } = {},
   ): Promise<AgentContextDocument[] | undefined> => {
     if (!agentId) return undefined;
 
     const cachedDocuments = this.#get().agentDocumentsMap[agentId];
-    if (cachedDocuments !== undefined) return cachedDocuments;
+    const fetchedAt = this.#agentDocumentsFetchedAt.get(agentId);
+    const isStale =
+      options.maxAgeMs !== undefined &&
+      fetchedAt !== undefined &&
+      Date.now() - fetchedAt > options.maxAgeMs;
+    if (cachedDocuments !== undefined && !isStale) return cachedDocuments;
 
     const pendingRequest = this.#pendingAgentDocuments.get(agentId);
     if (pendingRequest) return pendingRequest;
 
+    const generation = this.#agentDocumentsGeneration.get(agentId) ?? 0;
     const request = resolveAgentDocumentsContext({ agentId })
       .then((documents) => {
-        if (documents) {
+        const isCurrent = (this.#agentDocumentsGeneration.get(agentId) ?? 0) === generation;
+        if (documents && isCurrent) {
+          this.#agentDocumentsFetchedAt.set(agentId, Date.now());
           this.#syncAgentDocuments(agentId, documents);
         }
 
         return documents;
       })
       .finally(() => {
-        this.#pendingAgentDocuments.delete(agentId);
+        // An invalidation may already have started a newer request; keep that one.
+        if (this.#pendingAgentDocuments.get(agentId) === request) {
+          this.#pendingAgentDocuments.delete(agentId);
+        }
       });
 
     this.#pendingAgentDocuments.set(agentId, request);
 
     return request;
+  };
+
+  /** Drop the cached document list so the next `ensureAgentDocuments` refetches it. */
+  invalidateAgentDocuments = (agentId: string): void => {
+    this.#agentDocumentsGeneration.set(
+      agentId,
+      (this.#agentDocumentsGeneration.get(agentId) ?? 0) + 1,
+    );
+    this.#pendingAgentDocuments.delete(agentId);
+    this.#agentDocumentsFetchedAt.delete(agentId);
+    if (this.#get().agentDocumentsMap[agentId] === undefined) return;
+
+    const { [agentId]: _dropped, ...rest } = this.#get().agentDocumentsMap;
+    this.#set({ agentDocumentsMap: rest }, false, 'invalidateAgentDocuments');
   };
 
   internal_dispatchAgentMap = (id: string, config: PartialDeep<LobeAgentConfig>): void => {

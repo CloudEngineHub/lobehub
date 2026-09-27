@@ -16,6 +16,22 @@ export interface InvalidateDocumentMutationParams {
   topicId?: string;
 }
 
+type AgentDocumentsInvalidationListener = (agentId: string) => void;
+
+const agentDocumentsInvalidationListeners = new Set<AgentDocumentsInvalidationListener>();
+
+/**
+ * Subscribe to agent document list invalidations. The agent store registers here
+ * (it cannot be imported from this module without a cycle) to drop the cached
+ * list the chat runtime uses for `<agent_documents_index>`.
+ */
+export const onAgentDocumentsInvalidated = (listener: AgentDocumentsInvalidationListener) => {
+  agentDocumentsInvalidationListeners.add(listener);
+  return () => {
+    agentDocumentsInvalidationListeners.delete(listener);
+  };
+};
+
 export const invalidateDocumentMutation = async (
   params: InvalidateDocumentMutationParams,
 ): Promise<void> => {
@@ -47,6 +63,9 @@ export const invalidateDocumentMutation = async (
   }
 
   if (agentId) {
+    // The chat runtime builds `<agent_documents_index>` from the agent store's
+    // cached list, not from SWR.
+    for (const listener of agentDocumentsInvalidationListeners) listener(agentId);
     revalidations.push(mutate(agentDocumentSWRKeys.documents(agentId)));
     // Prefix match so every `agent:documentsList` variant (full list + the
     // `non-web` hot-path variant, in both personal and workspace scope where the

@@ -62,6 +62,13 @@ export const resolveBrowserConnectorFeatures = (): ContextFactRequest['features'
   };
 };
 
+/**
+ * How long the browser runtime may reuse a fetched agent document list for
+ * `<agent_documents_index>` before refetching. The server runtime re-queries on
+ * every step; this keeps the browser within a minute of it.
+ */
+const AGENT_DOCUMENTS_CONTEXT_MAX_AGE_MS = 60_000;
+
 const resolveClientAppOrigin = (): string | undefined => {
   if (isDesktop) return electronSyncSelectors.remoteServerUrl(getElectronStoreState()) || undefined;
   if (typeof window === 'undefined') return undefined;
@@ -170,8 +177,13 @@ export const createBrowserContextFactProviders = ({
     slug: getActiveWorkspaceSlug() ?? undefined,
   }),
 
-  // Cache-first: the store dedupes in-flight hydration per agent.
-  listAgentDocuments: (targetAgentId) => getAgentStoreState().ensureAgentDocuments(targetAgentId),
+  // Cache-first: the store dedupes in-flight hydration per agent. Writes from this
+  // tab invalidate the cache; the age bound picks up changes made elsewhere (other
+  // devices, server-side runs, deletes in another tab).
+  listAgentDocuments: (targetAgentId) =>
+    getAgentStoreState().ensureAgentDocuments(targetAgentId, {
+      maxAgeMs: AGENT_DOCUMENTS_CONTEXT_MAX_AGE_MS,
+    }),
 
   listConnectedConnectorIds: async () => {
     const toolState = getToolStoreState();

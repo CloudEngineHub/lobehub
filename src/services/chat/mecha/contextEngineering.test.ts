@@ -141,7 +141,7 @@ describe('contextEngineering', () => {
     });
 
     // Cache-first: the store answers, the document service is never asked.
-    expect(ensureSpy).toHaveBeenCalledWith('agent-1');
+    expect(ensureSpy).toHaveBeenCalledWith('agent-1', { maxAgeMs: 60_000 });
     expect(agentDocumentService.getDocuments).not.toHaveBeenCalled();
     const documentsMessage = output.find(
       (message) =>

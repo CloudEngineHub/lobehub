@@ -10,7 +10,7 @@ import { setScopedMutate } from '@/libs/swr';
 import { agentConfigKeys, builtinAgentKeys } from '@/libs/swr/keys';
 import * as cacheScopeModule from '@/libs/swr/useCacheScope';
 import { agentService } from '@/services/agent';
-import { agentDocumentService } from '@/services/agentDocument';
+import { agentDocumentService, resolveAgentDocumentsContext } from '@/services/agentDocument';
 import { useGlobalStore } from '@/store/global';
 import { useUserStore } from '@/store/user';
 import { type LobeAgentConfig } from '@/types/agent';
@@ -533,6 +533,60 @@ describe('AgentSlice Actions', () => {
         expect(result.current.data).toEqual(docs);
       });
       expect(agentDocumentService.listDocuments).toHaveBeenCalledWith({ agentId: 'agent-1' });
+    });
+  });
+
+  describe('ensureAgentDocuments', () => {
+    const doc = (id: string) => ({
+      filename: `${id}.md`,
+      id,
+      policyLoad: 'progressive',
+      title: id,
+    });
+
+    it('refetches after agent documents are invalidated instead of serving a deleted doc', async () => {
+      // A long-lived tab hydrated the list once; the user then deleted the doc.
+      // The client runtime kept advertising it in <agent_documents_index>.
+      vi.mocked(resolveAgentDocumentsContext)
+        .mockResolvedValueOnce([doc('zhu-settings')] as any)
+        .mockResolvedValueOnce([] as any);
+
+      const { ensureAgentDocuments, invalidateAgentDocuments } = useAgentStore.getState();
+
+      await expect(ensureAgentDocuments('agent-1')).resolves.toEqual([doc('zhu-settings')]);
+      invalidateAgentDocuments('agent-1');
+      await expect(ensureAgentDocuments('agent-1')).resolves.toEqual([]);
+      expect(resolveAgentDocumentsContext).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops the cached list when a document mutation invalidates the agent', async () => {
+      const { invalidateDocumentMutation } = await import('@/services/document/invalidation');
+      useAgentStore.setState({ agentDocumentsMap: { 'agent-1': [doc('zhu-settings')] } } as any);
+
+      await invalidateDocumentMutation({ agentId: 'agent-1', cause: 'agent-document' });
+
+      expect(useAgentStore.getState().agentDocumentsMap['agent-1']).toBeUndefined();
+    });
+
+    it('refetches a cached list older than maxAgeMs', async () => {
+      const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+      vi.mocked(resolveAgentDocumentsContext)
+        .mockResolvedValueOnce([doc('old')] as any)
+        .mockResolvedValueOnce([doc('old'), doc('created-elsewhere')] as any);
+
+      const { ensureAgentDocuments } = useAgentStore.getState();
+
+      await ensureAgentDocuments('agent-1', { maxAgeMs: 60_000 });
+      now.mockReturnValue(1_030_000);
+      await expect(ensureAgentDocuments('agent-1', { maxAgeMs: 60_000 })).resolves.toEqual([
+        doc('old'),
+      ]);
+      now.mockReturnValue(1_061_000);
+      await expect(ensureAgentDocuments('agent-1', { maxAgeMs: 60_000 })).resolves.toEqual([
+        doc('old'),
+        doc('created-elsewhere'),
+      ]);
+      expect(resolveAgentDocumentsContext).toHaveBeenCalledTimes(2);
     });
   });
 

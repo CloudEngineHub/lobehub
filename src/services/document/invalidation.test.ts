@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { portalKeys } from '@/libs/swr/keys';
 
-import { invalidateDocumentMutation } from './invalidation';
+import { invalidateDocumentMutation, onAgentDocumentsInvalidated } from './invalidation';
 
 vi.mock('@/libs/swr', async () => ({ mutate: (await import('swr')).mutate }));
 
@@ -28,5 +28,17 @@ describe('invalidateDocumentMutation', () => {
 
     expect(result.current.document.data).toEqual(row);
     expect(otherFetcher).toHaveBeenCalledTimes(otherCalls);
+  });
+
+  it('notifies agent document listeners so the chat runtime drops its cached list', async () => {
+    const listener = vi.fn();
+    const unsubscribe = onAgentDocumentsInvalidated(listener);
+
+    await invalidateDocumentMutation({ agentId: 'agent-1', cause: 'agent-document' });
+    await invalidateDocumentMutation({ documentId: 'page-doc' });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('agent-1');
+    unsubscribe();
   });
 });
