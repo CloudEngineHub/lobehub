@@ -389,24 +389,32 @@ const gatherAgentManagementContext = async (
   const canDelegate = request.isSubAgent !== true;
   let context: AgentManagementContext | undefined;
 
-  if (canDelegate && (isAutoSkillMode || isEnabled) && providers.listRecentAgents) {
-    const { listRecentAgents } = providers;
-    const recent =
-      (await attempt('recentAgents', () => listRecentAgents(AVAILABLE_AGENTS_LIMIT + 2))) ?? [];
-    // The model is the current agent: its identity is already established by
-    // the system role, and it must never see its own id (it cannot call itself).
-    const others = request.agentId ? recent.filter((a) => a.id !== request.agentId) : recent;
-    context = {
-      availableAgents: others.slice(0, AVAILABLE_AGENTS_LIMIT).map((a) => ({
-        description: a.description ?? undefined,
-        id: a.id,
-        title: a.title ?? 'Untitled',
-      })),
-      availableAgentsHasMore: others.length > AVAILABLE_AGENTS_LIMIT,
-      ...(request.agentId && {
-        currentAgent: { id: request.agentId, title: request.agent.title ?? undefined },
-      }),
-    };
+  if ((isAutoSkillMode || isEnabled) && providers.listRecentAgents) {
+    // Self-management (updateAgent / installPlugin on itself) stays available
+    // inside a sub-agent, so its own id is kept; only the delegation list goes.
+    const currentAgent = request.agentId
+      ? { id: request.agentId, title: request.agent.title ?? undefined }
+      : undefined;
+
+    if (canDelegate) {
+      const { listRecentAgents } = providers;
+      const recent =
+        (await attempt('recentAgents', () => listRecentAgents(AVAILABLE_AGENTS_LIMIT + 2))) ?? [];
+      // The model is the current agent: its identity is already established by
+      // the system role, and it must never see its own id (it cannot call itself).
+      const others = request.agentId ? recent.filter((a) => a.id !== request.agentId) : recent;
+      context = {
+        availableAgents: others.slice(0, AVAILABLE_AGENTS_LIMIT).map((a) => ({
+          description: a.description ?? undefined,
+          id: a.id,
+          title: a.title ?? 'Untitled',
+        })),
+        availableAgentsHasMore: others.length > AVAILABLE_AGENTS_LIMIT,
+        ...(currentAgent && { currentAgent }),
+      };
+    } else if (currentAgent) {
+      context = { currentAgent };
+    }
   }
 
   if (isEnabled) {
