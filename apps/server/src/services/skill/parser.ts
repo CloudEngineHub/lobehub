@@ -12,7 +12,19 @@ import { sha256 } from 'js-sha256';
 
 import { SkillManifestError, SkillParseError } from './errors';
 
-export interface ParseZipOptions {
+export interface ParseSkillMdOptions {
+  /**
+   * Fallback skill name used when SKILL.md has no YAML front-matter AND no
+   * `# H1` heading to derive a name from (e.g. the market identifier or the
+   * skill directory name).
+   */
+  fallbackName?: string;
+}
+
+/** Max length of a description derived from SKILL.md body text */
+const DERIVED_DESCRIPTION_MAX_LENGTH = 300;
+
+export interface ParseZipOptions extends ParseSkillMdOptions {
   /**
    * Base path within the ZIP to look for SKILL.md
    * Used when importing from GitHub subdirectory URLs like:
@@ -35,10 +47,12 @@ export class SkillParser {
    * @param fileContent - Raw content of SKILL.md file
    * @returns Parsed manifest, content and raw content
    */
-  parseSkillMd(fileContent: string): ParsedSkill {
+  parseSkillMd(fileContent: string, options?: ParseSkillMdOptions): ParsedSkill {
     try {
-      const { data, content } = matter(fileContent);
-      const manifest = this.validateManifest(data);
+      const { data, content } = matter(this.stripLeadingCommentsBeforeFrontMatter(fileContent));
+      const manifest = this.validateManifest(
+        this.deriveManifestWithoutFrontMatter(data, content, options),
+      );
 
       return {
         content: content.trim(),
@@ -84,8 +98,11 @@ export class SkillParser {
         throw new SkillParseError('SKILL.md not found in zip package');
       }
 
-      // Parse SKILL.md
-      const { content, manifest } = this.parseSkillMd(skillMdContent);
+      // Parse SKILL.md (a nested SKILL.md's directory name is the last-resort name fallback)
+      const skillDirName = skillMdPath.includes('/') ? skillMdPath.split('/').at(-2) : undefined;
+      const { content, manifest } = this.parseSkillMd(skillMdContent, {
+        fallbackName: options?.fallbackName || skillDirName,
+      });
 
       // Extract resource files
       const resources = this.extractResources(unzipped, skillMdPath);
@@ -107,6 +124,97 @@ export class SkillParser {
       }
       throw new SkillParseError('Failed to parse ZIP package', error as Error);
     }
+  }
+
+  /**
+   * Some exported skills prepend an HTML comment (e.g.
+   * `<!-- AUTO-GENERATED ... -->`) before the `---` front-matter block, which
+   * makes gray-matter miss the front-matter entirely. Strip leading BOM /
+   * whitespace / HTML comments, but only when front-matter follows them.
+   */
+  private stripLeadingCommentsBeforeFrontMatter(fileContent: string): string {
+    const stripped = fileContent.replace(/^\uFEFF?(?:\s*<!--[\s\S]*?-->)*\s*/, '');
+    return stripped !== fileContent && stripped.startsWith('---') ? stripped : fileContent;
+  }
+
+  /**
+   * Many published skills (Claude Code style) ship a SKILL.md with no YAML
+   * front-matter at all — it starts straight with `# Title` followed by a
+   * blockquote/paragraph summary. For those, derive `name` from the first H1
+   * (falling back to `options.fallbackName`) and `description` from the first
+   * text block after it, so the manifest can still be validated.
+   *
+   * When front-matter IS present it stays authoritative and is returned as-is
+   * (missing fields there are still reported as validation errors). Genuinely
+   * empty bodies derive nothing and keep failing validation.
+   */
+  private deriveManifestWithoutFrontMatter(
+    data: Record<string, unknown>,
+    content: string,
+    options?: ParseSkillMdOptions,
+  ): Record<string, unknown> {
+    if (Object.keys(data).length > 0) return data;
+
+    const lines = content.split(/\r?\n/);
+    let name: string | undefined;
+    let description: string | undefined;
+    let block: string[] = [];
+    let inFence = false;
+
+    const flushBlock = () => {
+      if (block.length > 0 && !description) description = block.join(' ');
+      block = [];
+    };
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+
+      if (/^(?:```|~~~)/.test(line)) {
+        flushBlock();
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) continue;
+
+      if (!line) {
+        flushBlock();
+        if (description) break;
+        continue;
+      }
+
+      const headingMarker = /^#{1,6}(?=\s)/.exec(line)?.[0];
+      if (headingMarker) {
+        flushBlock();
+        if (description) break;
+        if (!name && headingMarker === '#') {
+          // Drop optional closing hashes: `# Title #`
+          const title = line.slice(1).replace(/\s#+$/, '').trim();
+          if (title) name = title;
+        }
+        continue;
+      }
+
+      // Skip HTML comments / tags, horizontal rules and images
+      if (/^(?:<[!/a-z]|-{3,}$|\*{3,}$|_{3,}$|!\[)/i.test(line)) continue;
+
+      // Strip blockquote / list markers so the description is plain text
+      const text = line.replace(/^(?:>\s*)+/, '').replace(/^(?:[*+-]|\d+\.)\s+/, '');
+      if (text) block.push(text);
+    }
+    flushBlock();
+
+    if (description && description.length > DERIVED_DESCRIPTION_MAX_LENGTH) {
+      description = description.slice(0, DERIVED_DESCRIPTION_MAX_LENGTH - 1).trimEnd() + '…';
+    }
+
+    // Only fall back to the caller-supplied name when the body has real text,
+    // so an empty SKILL.md is still rejected.
+    if (!name && description) name = options?.fallbackName;
+
+    return {
+      ...(description && { description }),
+      ...(name && { name }),
+    };
   }
 
   /**
