@@ -49,9 +49,14 @@ export class SkillParser {
    */
   parseSkillMd(fileContent: string, options?: ParseSkillMdOptions): ParsedSkill {
     try {
-      const { data, content } = matter(this.stripLeadingCommentsBeforeFrontMatter(fileContent));
+      const source = this.stripLeadingCommentsBeforeFrontMatter(fileContent);
+      const { data, content } = matter(source);
+      // gray-matter yields the same empty `data` for an absent block and for an
+      // empty / comment-only one (`---\n---`), so presence is detected on the
+      // source: a present-but-incomplete block must stay authoritative.
+      const hasFrontMatter = /^\uFEFF?---\s*\n/.test(source);
       const manifest = this.validateManifest(
-        this.deriveManifestWithoutFrontMatter(data, content, options),
+        hasFrontMatter ? data : this.deriveManifestWithoutFrontMatter(content, options),
       );
 
       return {
@@ -144,18 +149,17 @@ export class SkillParser {
    * (falling back to `options.fallbackName`) and `description` from the first
    * text block after it, so the manifest can still be validated.
    *
-   * When front-matter IS present it stays authoritative and is returned as-is
-   * (missing fields there are still reported as validation errors). Genuinely
-   * empty bodies derive nothing and keep failing validation.
+   * Only called when no front-matter block exists — a present block stays
+   * authoritative (missing fields there are still reported as validation
+   * errors). Genuinely empty bodies derive nothing and keep failing validation.
    */
   private deriveManifestWithoutFrontMatter(
-    data: Record<string, unknown>,
     content: string,
     options?: ParseSkillMdOptions,
   ): Record<string, unknown> {
-    if (Object.keys(data).length > 0) return data;
-
-    const lines = content.split(/\r?\n/);
+    // Drop complete HTML comments (single- or multi-line) first, so comment
+    // bodies can never be taken as the title or description.
+    const lines = content.replaceAll(/<!--[\s\S]*?-->/g, '').split(/\r?\n/);
     let name: string | undefined;
     let description: string | undefined;
     let block: string[] = [];
