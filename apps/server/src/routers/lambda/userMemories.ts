@@ -12,7 +12,7 @@ import {
   ExperienceMemoryItemSchema,
   PreferenceMemoryItemSchema,
   RemoveIdentityActionSchema,
-  UpdateIdentityActionSchema,
+  UpdateIdentityToolInputSchema,
 } from '@lobechat/memory-user-memory';
 import type { QueryTaxonomyOptionsResult, SearchMemoryResult } from '@lobechat/types';
 import { LayersEnum, queryTaxonomyOptionsSchema, searchMemorySchema } from '@lobechat/types';
@@ -1348,7 +1348,7 @@ export const userMemoriesRouter = router({
     }),
 
   toolUpdateIdentityMemory: memoryWriteProcedure
-    .input(UpdateIdentityActionSchema)
+    .input(UpdateIdentityToolInputSchema)
     .mutation(async ({ input, ctx }) => {
       try {
         const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(

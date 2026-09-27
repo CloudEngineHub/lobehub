@@ -138,6 +138,52 @@ export const UpdateIdentityActionSchema = z
   })
   .strict();
 
+const dropNullFields = (value: unknown) =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null))
+    : value;
+
+/**
+ * Input of the updateIdentityMemory tool. The tool manifest only requires `set.withIdentity`
+ * and tells the model to "use null for omitting the field", so every other field is optional
+ * and a null leaves the stored value untouched instead of being written over it.
+ * UpdateIdentityActionSchema keeps every field present because the extractor feeds it to
+ * strict structured output, which requires that.
+ */
+export const UpdateIdentityToolInputSchema = z
+  .object({
+    id: z.string(),
+    mergeStrategy: z.nativeEnum(MergeStrategyEnum),
+    set: z.preprocess(
+      dropNullFields,
+      z.object({
+        details: z.string().optional(),
+        memoryCategory: z.string().optional(),
+        memoryType: MemoryTypeSchema.optional(),
+        summary: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        title: z.string().optional(),
+        withIdentity: z.preprocess(
+          dropNullFields,
+          z
+            .object({
+              description: z.string().optional(),
+              episodicDate: z.string().optional(),
+              extractedLabels: z.array(z.string()).optional(),
+              relationship: z.string().optional(),
+              role: z.string().optional(),
+              scoreConfidence: z.number().optional(),
+              sourceIds: z.array(z.string()).optional(),
+              sourceEvidence: z.string().optional(),
+              type: z.string().optional(),
+            })
+            .strict(),
+        ),
+      }),
+    ),
+  })
+  .strict();
+
 export const RemoveIdentityActionSchema = z
   .object({
     id: z.string(),
@@ -171,4 +217,5 @@ export const WithIdentitySchema = z
 export type IdentityActions = z.infer<typeof IdentityActionsSchema>;
 export type AddIdentityAction = z.infer<typeof AddIdentityActionSchema>;
 export type UpdateIdentityAction = z.infer<typeof UpdateIdentityActionSchema>;
+export type UpdateIdentityToolInput = z.infer<typeof UpdateIdentityToolInputSchema>;
 export type RemoveIdentityAction = z.infer<typeof RemoveIdentityActionSchema>;

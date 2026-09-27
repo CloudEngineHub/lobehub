@@ -16,7 +16,7 @@ import type {
   ExperienceMemoryItemSchema,
   PreferenceMemoryItemSchema,
   RemoveIdentityActionSchema,
-  UpdateIdentityActionSchema,
+  UpdateIdentityToolInputSchema,
 } from '@lobechat/memory-user-memory/schemas';
 import type {
   AddActivityMemoryResult,
@@ -676,7 +676,7 @@ class MemoryServerRuntimeService implements MemoryRuntimeService {
   };
 
   updateIdentityMemory = async (
-    input: z.infer<typeof UpdateIdentityActionSchema>,
+    input: z.infer<typeof UpdateIdentityToolInputSchema>,
   ): Promise<UpdateIdentityMemoryResult> => {
     try {
       const { agentRuntime, embeddingModel } = await getEmbeddingRuntime(
