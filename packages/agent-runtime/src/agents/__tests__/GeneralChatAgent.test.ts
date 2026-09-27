@@ -345,6 +345,42 @@ describe('GeneralChatAgent', () => {
       expect(result.payload.blockedContent).not.toContain('Copy a name exactly');
     });
 
+    it('keeps the typo feedback for other names batched with a locked picker call', async () => {
+      const agent = new GeneralChatAgent({
+        agentConfig: { maxSteps: 100 },
+        operationId: 'test-session',
+        modelRuntimeConfig: mockModelRuntimeConfig,
+      });
+
+      const state = createMockState({
+        plan: { execution: { deviceId: 'device-a', kind: 'device', target: 'local' } },
+      } as Partial<AgentState>);
+      const context = createMockContext('llm_result', {
+        hasToolsCalling: true,
+        toolsCalling: [],
+        parentMessageId: 'msg-1',
+        result: {
+          content: '',
+          tool_calls: [
+            {
+              id: 't1',
+              type: 'function',
+              function: { name: 'lobe-remote-device____activateDevice', arguments: '{}' },
+            },
+            { id: 't2', type: 'function', function: { name: 'activateTools', arguments: '{}' } },
+          ],
+        },
+      });
+
+      const result = (await agent.runner(context, state)) as any;
+
+      expect(result.payload.blockedContent).toBe(
+        'Tool call rejected: lobe-remote-device____activateDevice is not available in this run. Device switching is off for this run: it is locked to device "device-a", where the Local System tools already run. You cannot activate another device from here. If the user wants a different device, tell them to pick it in the device selector of the chat input and send the message again.' +
+          '\n\n' +
+          'Tool call rejected: no available tool is named activateTools. Copy a name exactly as declared in the tools schema and call it again.',
+      );
+    });
+
     it('should reject unresolvable tool_calls so the model can retry', async () => {
       const agent = new GeneralChatAgent({
         agentConfig: { maxSteps: 100 },

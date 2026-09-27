@@ -825,22 +825,27 @@ export class GeneralChatAgent implements Agent {
 
           // A picker call on a locked run is not a typo: the tool was withheld on
           // purpose, and "copy the name exactly" sends the model into a retry
-          // loop that ends the operation. Say why and who can switch instead.
-          const lockedPickerNote =
-            state.plan?.execution &&
-            namedToolCalls.some(
-              (toolCall) =>
-                toolCall.function.name.split(PLUGIN_SCHEMA_SEPARATOR)[0] ===
-                REMOTE_DEVICE_IDENTIFIER,
-            )
-              ? describeLockedDevicePicker(state.plan.execution)
-              : undefined;
+          // loop that ends the operation. Say why and who can switch instead;
+          // any other unresolved name in the batch keeps the typo feedback.
+          const lockedPickerNote = state.plan?.execution
+            ? describeLockedDevicePicker(state.plan.execution)
+            : undefined;
+          const isPickerCall = (name: string) =>
+            name.split(PLUGIN_SCHEMA_SEPARATOR)[0] === REMOTE_DEVICE_IDENTIFIER;
+          const allNames = namedToolCalls.map((toolCall) => toolCall.function.name);
+          const pickerNames = lockedPickerNote ? allNames.filter(isPickerCall) : [];
+          const otherNames = allNames.filter((name) => !pickerNames.includes(name));
+          const blockedContent = [
+            pickerNames.length > 0 &&
+              `Tool call rejected: ${pickerNames.join(', ')} is not available in this run. ${lockedPickerNote}`,
+            otherNames.length > 0 && unresolvedToolContent(otherNames.join(', ')),
+          ]
+            .filter(Boolean)
+            .join('\n\n');
 
           return {
             payload: {
-              blockedContent: lockedPickerNote
-                ? `Tool call rejected: ${unresolvedNames} is not available in this run. ${lockedPickerNote}`
-                : unresolvedToolContent(unresolvedNames),
+              blockedContent,
               blockedReason: UNRESOLVED_TOOL_REASON,
               parentMessageId,
               unresolvedToolNames: true,
