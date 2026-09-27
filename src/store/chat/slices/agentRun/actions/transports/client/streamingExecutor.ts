@@ -308,7 +308,10 @@ export class StreamingExecutorActionImpl {
         isPageEditorReady: pageAgentRuntime.isReady(),
         scope,
       },
-      injectedManifests: initialContext?.initialContext?.injectedManifests,
+      // A goal turn is exclusive (see `exclusivePluginIds` above): an injected
+      // manifest such as `callAgent` from an @agent mention would let the model
+      // delegate the work instead of creating the goal.
+      injectedManifests: isGoalTurn ? undefined : initialContext?.initialContext?.injectedManifests,
       toolsDetailed,
     });
 

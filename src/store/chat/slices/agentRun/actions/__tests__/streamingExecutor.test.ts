@@ -1,5 +1,6 @@
 import type { AgentState } from '@lobechat/agent-runtime';
 import * as agentRuntime from '@lobechat/agent-runtime';
+import { createCallAgentManifest } from '@lobechat/builtin-tool-agent-management';
 import { resolveLocalSystemManifest } from '@lobechat/builtin-tool-local-system';
 import type * as LobeChatConst from '@lobechat/const';
 import { type LobeChatPluginApi, type UIChatMessage } from '@lobechat/types';
@@ -1979,6 +1980,26 @@ describe('StreamingExecutor actions', () => {
       expect(
         state.operationToolSet?.tools.some((tool) => tool.function.name.includes('createGoal')),
       ).toBe(true);
+    });
+
+    it('keeps a /goal turn exclusive even when an @agent mention injects callAgent', () => {
+      const { result } = renderHook(() => useChatStore());
+      const userMessage = createUserMessage('/goal @researcher compile the pricing benchmarks');
+
+      const { state } = result.current.internal_createAgentState({
+        agentId: TEST_IDS.SESSION_ID,
+        initialContext: {
+          initialContext: { injectedManifests: [createCallAgentManifest()] },
+        } as any,
+        messages: [userMessage],
+        parentMessageId: userMessage.id,
+        topicId: TEST_IDS.TOPIC_ID,
+      });
+
+      expect(state.operationToolSet?.enabledToolIds).toEqual(['lobe-goal']);
+      expect(
+        state.operationToolSet?.tools.some((tool) => tool.function.name.includes('callAgent')),
+      ).toBe(false);
     });
 
     it('keeps the normal tool set for a turn that does not start with /goal', () => {
