@@ -36,19 +36,6 @@ export class AgentListActionImpl {
     this.#set({ allAgentsDrawerOpen: true }, false, n('openAllAgentsDrawer'));
   };
 
-  /**
-   * Refetch the list even where no `useFetchAgentList` is mounted. Off-home
-   * surfaces such as the group switcher read the list from this store, and a
-   * key-only revalidation (`refreshAgentList`) refetches nothing there.
-   */
-  fetchAgentList = async (): Promise<void> => {
-    getAgentStoreState().invalidateAvailableAgents();
-
-    const data = await homeService.getSidebarAgentList();
-    await mutate(agentKeys.list(true), data, { revalidate: false });
-    this.#applyAgentList(data, 'fetchAgentList');
-  };
-
   refreshAgentList = async (): Promise<void> => {
     getAgentStoreState().invalidateAvailableAgents();
     await mutate(agentKeys.list(true));
@@ -59,35 +46,33 @@ export class AgentListActionImpl {
       isLogin === true ? agentKeys.list(isLogin) : null,
       () => homeService.getSidebarAgentList(),
       {
-        onData: (data) => this.#applyAgentList(data, 'useFetchAgentList/onData'),
+        onData: (data) => {
+          const state = this.#get();
+          const newState = mapResponseToState(data);
+
+          // Skip update if data is the same
+          if (
+            state.isAgentListInit &&
+            isEqual(state.pinnedAgents, newState.pinnedAgents) &&
+            isEqual(state.agentGroups, newState.agentGroups) &&
+            isEqual(state.ungroupedAgents, newState.ungroupedAgents) &&
+            isEqual(state.privateAgentGroups, newState.privateAgentGroups) &&
+            isEqual(state.privatePinnedAgents, newState.privatePinnedAgents) &&
+            isEqual(state.privateUngroupedAgents, newState.privateUngroupedAgents)
+          ) {
+            return;
+          }
+
+          this.#set(
+            {
+              ...newState,
+              isAgentListInit: true,
+            },
+            false,
+            n('useFetchAgentList/onData'),
+          );
+        },
       },
-    );
-  };
-
-  #applyAgentList = (data: SidebarAgentListResponse, action: string): void => {
-    const state = this.#get();
-    const newState = mapResponseToState(data);
-
-    // Skip update if data is the same
-    if (
-      state.isAgentListInit &&
-      isEqual(state.pinnedAgents, newState.pinnedAgents) &&
-      isEqual(state.agentGroups, newState.agentGroups) &&
-      isEqual(state.ungroupedAgents, newState.ungroupedAgents) &&
-      isEqual(state.privateAgentGroups, newState.privateAgentGroups) &&
-      isEqual(state.privatePinnedAgents, newState.privatePinnedAgents) &&
-      isEqual(state.privateUngroupedAgents, newState.privateUngroupedAgents)
-    ) {
-      return;
-    }
-
-    this.#set(
-      {
-        ...newState,
-        isAgentListInit: true,
-      },
-      false,
-      n(action),
     );
   };
 

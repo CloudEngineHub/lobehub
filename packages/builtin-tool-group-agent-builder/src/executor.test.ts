@@ -7,7 +7,7 @@ import { GroupAgentBuilderApiName, GroupAgentBuilderIdentifier } from './types';
 const {
   mockCreateAgent,
   mockRefreshAgentConfig,
-  mockFetchAgentList,
+  mockRefreshAgentList,
   mockRefreshGroupDetail,
   mockRefreshGroups,
   mockSetAgentBuilderContent,
@@ -16,7 +16,7 @@ const {
 } = vi.hoisted(() => ({
   mockCreateAgent: vi.fn(),
   mockRefreshAgentConfig: vi.fn(),
-  mockFetchAgentList: vi.fn(),
+  mockRefreshAgentList: vi.fn(),
   mockRefreshGroupDetail: vi.fn(),
   mockRefreshGroups: vi.fn(),
   mockSetAgentBuilderContent: vi.fn(),
@@ -31,7 +31,7 @@ vi.mock('@/store/agent', () => ({
 }));
 
 vi.mock('@/store/home', () => ({
-  getHomeStoreState: () => ({ fetchAgentList: mockFetchAgentList }),
+  getHomeStoreState: () => ({ refreshAgentList: mockRefreshAgentList }),
 }));
 
 vi.mock('@/store/agentGroup', () => ({
@@ -350,20 +350,20 @@ describe('GroupAgentBuilderExecutor', () => {
     it('refreshes the home agent list after createGroup so the switcher lists it', async () => {
       await afterCall(GroupAgentBuilderApiName.createGroup, { title: 'Launch' }, true);
 
-      expect(mockFetchAgentList).toHaveBeenCalled();
+      expect(mockRefreshAgentList).toHaveBeenCalled();
     });
 
     it('refreshes the home agent list after updateGroup renames the group', async () => {
       await afterCall(GroupAgentBuilderApiName.updateGroup, { meta: { title: 'Renamed' } }, true);
 
-      expect(mockFetchAgentList).toHaveBeenCalled();
+      expect(mockRefreshAgentList).toHaveBeenCalled();
       expect(mockRefreshGroupDetail).toHaveBeenCalledWith('cg_1');
     });
 
     it('does not refresh the home agent list when createGroup failed', async () => {
       await afterCall(GroupAgentBuilderApiName.createGroup, { title: 'Launch' }, false);
 
-      expect(mockFetchAgentList).not.toHaveBeenCalled();
+      expect(mockRefreshAgentList).not.toHaveBeenCalled();
       expect(mockRefreshGroups).not.toHaveBeenCalled();
     });
 

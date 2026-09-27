@@ -345,7 +345,7 @@ class GroupAgentBuilderExecutor extends BaseExecutor<typeof GroupAgentBuilderApi
 
     const groupStore = getChatGroupStoreState();
 
-    if (HOME_LIST_WRITE_APIS.has(apiName)) await getHomeStoreState().fetchAgentList();
+    if (HOME_LIST_WRITE_APIS.has(apiName)) await getHomeStoreState().refreshAgentList();
 
     // A brand-new group isn't in the list yet — refresh the list, not a detail.
     if (apiName === GroupAgentBuilderApiName.createGroup) {
