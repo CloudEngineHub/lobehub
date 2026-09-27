@@ -3700,6 +3700,20 @@ export class AgentRuntimeService {
     } = params;
     const failed = reason === 'error' || reason === 'interrupted' || reason === 'timeout';
 
+    // Members answer to the supervisor's approval mode, so a member can park on
+    // a tool that needs the user's approval. That segment fires `onComplete`
+    // (so the approval surfaces), but the member has not answered yet: leave its
+    // anchor pending and the supervisor parked. The approval continuation
+    // inherits this bridge hook and reports the member's real outcome.
+    if (reason === 'waiting_for_human') {
+      log(
+        '[%s] group-member bridge: member parked for human approval, holding parent %s',
+        operationId,
+        parentOperationId,
+      );
+      return false;
+    }
+
     const finalState =
       params.finalState ?? (await this.coordinator.loadAgentState(operationId)) ?? undefined;
 
