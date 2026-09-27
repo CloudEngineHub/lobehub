@@ -2,6 +2,7 @@ import useSWR from 'swr';
 
 import { gatewayKeys } from '@/libs/swr/keys';
 import { useChatStore } from '@/store/chat';
+import { topicSelectors } from '@/store/chat/selectors';
 import { useServerConfigStore } from '@/store/serverConfig';
 import { isTrpcErrorCode } from '@/utils/trpcError';
 
@@ -44,6 +45,13 @@ export const useGatewayReconnect = (
    * `reconnectToGatewayOperation`'s param JSDoc.
    */
   agentShareId?: string,
+  /**
+   * Conversation shape of a surface that is not a plain agent chat. A group chat
+   * passes its `groupId` so the reconnected supervisor stream — and the member
+   * events forwarded onto it — land in the group's bucket; the group builder
+   * passes its `scope` so the builder panel's bucket is the one that updates.
+   */
+  conversation?: { groupId?: string; scope?: string },
 ) => {
   const agentGatewayUrl = useServerConfigStore((s) => s.serverConfig.agentGatewayUrl);
 
@@ -58,9 +66,10 @@ export const useGatewayReconnect = (
         agentId,
         agentShareId,
         assistantMessageId: runningOperation.assistantMessageId,
+        groupId: conversation?.groupId,
         heteroType: runningOperation.heteroType,
         operationId: runningOperation.operationId,
-        scope: runningOperation.scope,
+        scope: conversation?.scope ?? runningOperation.scope,
         startedAt: runningOperation.startedAt,
         threadId: runningOperation.threadId,
         topicId,
@@ -76,4 +85,23 @@ export const useGatewayReconnect = (
       shouldRetryOnError: (error) => !isTrpcErrorCode(error, 'NOT_FOUND'),
     },
   );
+};
+
+/**
+ * `useGatewayReconnect` for a surface whose topic lives in the chat store's
+ * topic map: resume the run its `runningOperation` marker says is still going.
+ *
+ * The group chat and the group builder panel both need this; without it a
+ * reload mid-run left them with no stream, no stop button and a stale view
+ * until the next manual refresh after the run ended.
+ */
+export const useTopicGatewayReconnect = (
+  topicId: string | null | undefined,
+  agentId: string | undefined,
+  conversation?: { groupId?: string; scope?: string },
+) => {
+  const runningOperation = useChatStore((s) =>
+    topicId ? topicSelectors.getTopicById(topicId)(s)?.metadata?.runningOperation : undefined,
+  );
+  useGatewayReconnect(topicId, runningOperation, agentId, undefined, conversation);
 };

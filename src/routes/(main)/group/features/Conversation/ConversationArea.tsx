@@ -16,6 +16,7 @@ import {
   ForwardMessageDispatcher,
   MessageForwardFooter,
 } from '@/features/Conversation/MessageForward';
+import { useTopicGatewayReconnect } from '@/hooks/useGatewayReconnect';
 import { useOperationState } from '@/hooks/useOperationState';
 import { useChatStore } from '@/store/chat';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
@@ -53,6 +54,14 @@ const Conversation = memo<ConversationAreaProps>(({ mobile = false }) => {
   const operationState = useOperationState(context);
 
   const actionsBarConfig = useActionsBarConfig();
+
+  // Resume a supervisor run still going on the server after a reload, like the
+  // agent page does — members stream over the supervisor's socket, so this
+  // one reconnect brings the whole group run back.
+  useTopicGatewayReconnect(context.topicId, context.agentId, {
+    groupId: context.groupId,
+    scope: 'group',
+  });
 
   // A topic still awaiting its transfer/copy backfill shows a placeholder
   // instead of an empty (not-yet-migrated) history, and blocks sending — the
