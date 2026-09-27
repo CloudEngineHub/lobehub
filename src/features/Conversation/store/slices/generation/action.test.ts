@@ -1120,6 +1120,191 @@ describe('Generation Actions', () => {
     });
   });
 
+  describe('group supervisor regenerate (server runtime shape)', () => {
+    const setupChatStore = async () => {
+      const { useChatStore } = await import('@/store/chat');
+      vi.mocked(useChatStore.getState).mockReturnValue({
+        messagesMap: {},
+        operations: {},
+        operationsByMessage: {},
+        topicDataMap: {},
+
+        cancelOperations: mockCancelOperations,
+        cancelOperation: mockCancelOperation,
+        deleteMessage: mockDeleteMessage,
+        switchMessageBranch: mockSwitchMessageBranch,
+        startOperation: mockStartOperation,
+        associateMessageWithOperation: mockAssociateMessageWithOperation,
+        completeOperation: mockCompleteOperation,
+        failOperation: mockFailOperation,
+        executeClientAgent: mockExecuteClientAgent,
+        isGatewayModeEnabled: mockIsGatewayModeEnabled,
+      } as any);
+    };
+
+    const context: ConversationContext = {
+      agentId: 'supervisor-agent',
+      groupId: 'group-1',
+      threadId: null,
+      topicId: 'topic-1',
+    };
+
+    it('counts only non-tool children when picking the new branch index', async () => {
+      await setupChatStore();
+      const store = createStore({ context });
+
+      // A tool row directly under the user turn is inline data, not a branch —
+      // BranchResolver excludes it, so the new branch index must too.
+      act(() => {
+        store.setState({
+          dbMessages: [
+            { content: 'Hello', id: 'user-1', role: 'user' },
+            { content: '', id: 'speak-tool', parentId: 'user-1', role: 'tool' },
+            {
+              agentId: 'member',
+              content: 'old',
+              id: 'member-1',
+              parentId: 'user-1',
+              role: 'assistant',
+            },
+          ],
+          displayMessages: [{ content: 'Hello', id: 'user-1', role: 'user' }],
+        } as any);
+      });
+
+      await act(async () => {
+        await store.getState().regenerateUserMessage('user-1');
+      });
+
+      expect(mockSwitchMessageBranch).toHaveBeenCalledWith('user-1', 1, {
+        operationId: 'test-op-id',
+      });
+    });
+
+    it('keeps the whole supervisor round as a branch on delete-and-regenerate', async () => {
+      await setupChatStore();
+      const store = createStore({ context });
+
+      act(() => {
+        store.setState({
+          dbMessages: [
+            { content: 'Hello', id: 'user-1', role: 'user' },
+            {
+              agentId: 'supervisor-agent',
+              content: '',
+              id: 'supervisor-1',
+              metadata: { orchestrationRole: 'supervisor' },
+              parentId: 'user-1',
+              role: 'assistant',
+            },
+            { content: '', id: 'speak-tool', parentId: 'supervisor-1', role: 'tool' },
+            {
+              agentId: 'member',
+              content: 'member reply',
+              id: 'member-1',
+              parentId: 'supervisor-1',
+              role: 'assistant',
+            },
+          ],
+          displayMessages: [
+            { content: 'Hello', id: 'user-1', role: 'user' },
+            { content: '', id: 'supervisor-1', parentId: 'user-1', role: 'supervisor' },
+            {
+              content: 'member reply',
+              id: 'member-1',
+              parentId: 'supervisor-1',
+              role: 'assistant',
+            },
+          ],
+        } as any);
+      });
+
+      await act(async () => {
+        await store.getState().delAndRegenerateMessage('supervisor-1');
+      });
+
+      // Deleting only the supervisor row re-parents its tool/member/summary rows
+      // onto the user turn and the refreshed tree renders nothing.
+      expect(mockDeleteMessage).not.toHaveBeenCalled();
+      expect(mockSwitchMessageBranch).toHaveBeenCalledWith('user-1', 1, {
+        operationId: 'test-op-id',
+      });
+    });
+    describe('supervisor follow-up nested under a speak tool result', () => {
+      const setRound = (store: ReturnType<typeof createStore>) =>
+        act(() => {
+          store.setState({
+            dbMessages: [
+              { content: 'Hello', id: 'user-1', role: 'user' },
+              {
+                agentId: 'supervisor-agent',
+                content: '',
+                id: 'supervisor-1',
+                metadata: { orchestrationRole: 'supervisor' },
+                parentId: 'user-1',
+                role: 'assistant',
+              },
+              { content: '', id: 'speak-tool', parentId: 'supervisor-1', role: 'tool' },
+              {
+                agentId: 'member',
+                content: 'member reply',
+                id: 'member-1',
+                parentId: 'supervisor-1',
+                role: 'assistant',
+              },
+              {
+                agentId: 'supervisor-agent',
+                content: 'summary',
+                id: 'summary-1',
+                parentId: 'speak-tool',
+                role: 'assistant',
+              },
+            ],
+            displayMessages: [
+              { content: 'Hello', id: 'user-1', role: 'user' },
+              { content: '', id: 'supervisor-1', parentId: 'user-1', role: 'supervisor' },
+              {
+                content: 'member reply',
+                id: 'member-1',
+                parentId: 'supervisor-1',
+                role: 'assistant',
+              },
+              { content: 'summary', id: 'summary-1', parentId: 'speak-tool', role: 'assistant' },
+            ],
+          } as any);
+        });
+
+      it('regenerates the whole turn instead of stranding it on delete-and-regenerate', async () => {
+        await setupChatStore();
+        const store = createStore({ context });
+        setRound(store);
+
+        await act(async () => {
+          await store.getState().delAndRegenerateMessage('summary-1');
+        });
+
+        expect(mockDeleteMessage).not.toHaveBeenCalled();
+        expect(mockSwitchMessageBranch).toHaveBeenCalledWith('user-1', 1, {
+          operationId: 'test-op-id',
+        });
+      });
+
+      it('regenerates from the user turn rather than the tool parent', async () => {
+        await setupChatStore();
+        const store = createStore({ context });
+        setRound(store);
+
+        await act(async () => {
+          await store.getState().regenerateAssistantMessage('summary-1');
+        });
+
+        expect(mockSwitchMessageBranch).toHaveBeenCalledWith('user-1', 1, {
+          operationId: 'test-op-id',
+        });
+      });
+    });
+  });
+
   describe('delAndResendThreadMessage', () => {
     it('should create operation with context and pass operationId to deleteMessage', async () => {
       // Re-setup mock to ensure startOperation is available
