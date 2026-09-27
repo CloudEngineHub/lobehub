@@ -3543,11 +3543,13 @@ describe('GatewayActionImpl', () => {
         }),
       ).resolves.toBeUndefined();
 
-      expect(internalDispatchTopic).toHaveBeenCalledWith({
-        id: 'topic-1',
-        type: 'updateTopic',
-        value: { metadata: { model: 'gpt-4', runningOperation: null } },
-      });
+      expect(internalDispatchTopic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'topic-1',
+          type: 'updateTopic',
+          value: { metadata: { model: 'gpt-4', runningOperation: null } },
+        }),
+      );
       expect(connectToGateway).not.toHaveBeenCalled();
     });
 

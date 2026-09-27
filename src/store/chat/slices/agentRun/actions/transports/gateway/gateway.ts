@@ -50,7 +50,7 @@ import { consumePendingTopicRepos, getPendingTopicRepos } from '@/store/chat/pen
 import { topicSelectors } from '@/store/chat/selectors';
 import type { ChatStore } from '@/store/chat/store';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
-import { topicMapKey } from '@/store/chat/utils/topicMapKey';
+import { topicMapKey, type TopicMapScope } from '@/store/chat/utils/topicMapKey';
 import { getElectronStoreState } from '@/store/electron';
 import { getFileStoreState } from '@/store/file/store';
 import { getServerConfigStoreState } from '@/store/serverConfig';
@@ -70,7 +70,7 @@ import type { RunScope } from '../../lifecycle/types';
 import { createGatewayEventBuffer } from './gatewayEventBuffer';
 import { createGatewayEventHandler, isCompletedRuntimeEnd } from './gatewayEventHandler';
 import { createGatewayEventRouter } from './gatewayEventRouter';
-import { createGatewayMemberStreamHandler } from './gatewayMemberStreamHandler';
+import { createGatewayMemberRegistry } from './gatewayMemberStreamHandler';
 import {
   type GatewayMuxIdentity,
   getGatewayMux,
@@ -332,6 +332,24 @@ const isSuccessfulGatewayCompletion = (params: {
   (!params.authFailed &&
     params.completion?.source === 'resume_status' &&
     params.completion.status === 'completed');
+
+/**
+ * The topic-list bucket that owns a conversation's topic.
+ *
+ * The local topic helpers fall back to `activeGroupId` when no group is given,
+ * which is right for a group chat but wrong for the group builder: it runs as
+ * its own agent on the group's profile page, and its topics live in
+ * `agent_<builder>`. Resolving there left the builder topic `running` (marker
+ * and all) after its run ended, spinning in the sidebar until a reload.
+ */
+const topicOwnerOf = (context: {
+  agentId?: string;
+  groupId?: string | null;
+  scope?: string | null;
+}): { agentId?: string; groupId?: string; topicScope?: TopicMapScope } =>
+  context.scope === 'group_agent_builder'
+    ? { agentId: context.agentId, topicScope: 'agent' }
+    : { agentId: context.agentId, groupId: context.groupId ?? undefined };
 
 // ─── Action Implementation ───
 
@@ -1255,8 +1273,7 @@ export class GatewayActionImpl {
         void Promise.all([lateInterruptConfirmed, topicRefresh]).then(([confirmed]) => {
           if (!confirmed) return;
           this.#settleLocalTopicAfterConfirmedStop({
-            agentId: messageContext.agentId,
-            groupId: messageContext.groupId,
+            ...topicOwnerOf(messageContext),
             operationId: result.operationId,
             topicId,
           });
@@ -1271,9 +1288,10 @@ export class GatewayActionImpl {
     // would only produce a rejected request (and a pinned optimistic write that
     // no owner topic list ever consumes).
     if (result.topicId && !agentShareId) {
+      const { topicScope, ...owner } = topicOwnerOf(messageContext);
       void this.#get().updateTopicStatus?.({
-        agentId: messageContext.agentId,
-        groupId: messageContext.groupId,
+        ...owner,
+        ...(topicScope && { scope: topicScope }),
         status: 'running',
         topicId: result.topicId,
       });
@@ -1361,14 +1379,27 @@ export class GatewayActionImpl {
 
       if (result.topicId) {
         this.#settleLocalTopicAfterConfirmedStop({
-          agentId: resolvedMessageContext.agentId,
-          groupId: resolvedMessageContext.groupId,
+          ...topicOwnerOf(resolvedMessageContext),
           operationId: result.operationId,
           topicId: result.topicId,
         });
       }
     });
 
+    const runScope = (
+      resolvedExecutionContext.scope === 'sub_agent' ? 'sub_agent' : 'top_level'
+    ) as RunScope;
+    // Shared run lifecycle: drives the terminal completeRun / afterRunComplete
+    // for the gateway transport (op completion + unread + queue drain +
+    // notification) at `agent_runtime_end` / `error`.
+    const runLifecycle = buildRunLifecycle(this.#get, {
+      context: resolvedMessageContext,
+      parentMessageId: result.assistantMessageId,
+      parentMessageType: 'assistant',
+      runId: gatewayOpId,
+      runScope,
+      runtimeType: 'gateway',
+    });
     const eventHandler = createGatewayEventHandler(this.#get, {
       assistantMessageId: result.assistantMessageId,
       context: resolvedMessageContext,
@@ -1376,19 +1407,7 @@ export class GatewayActionImpl {
       // the same WS that gatewayConnections is keyed on.
       gatewayOperationId: result.operationId,
       operationId: gatewayOpId,
-      // Shared run lifecycle: drives the terminal completeRun / afterRunComplete
-      // for the gateway transport (op completion + unread + queue drain +
-      // notification) at `agent_runtime_end` / `error`.
-      runLifecycle: buildRunLifecycle(this.#get, {
-        context: resolvedMessageContext,
-        parentMessageId: result.assistantMessageId,
-        parentMessageType: 'assistant',
-        runId: gatewayOpId,
-        runScope: (resolvedExecutionContext.scope === 'sub_agent'
-          ? 'sub_agent'
-          : 'top_level') as RunScope,
-        runtimeType: 'gateway',
-      }),
+      runLifecycle,
     });
 
     // Demux the supervisor's WebSocket: with single-connection multiplexing
@@ -1397,8 +1416,9 @@ export class GatewayActionImpl {
     // full handler and member events to render-only member handlers so a
     // member's chunks stream into its own council column instead of corrupting
     // the supervisor bubble.
+    const memberRegistry = this.buildMemberRegistry(resolvedMessageContext, gatewayOpId);
     const eventRouter = createGatewayEventRouter({
-      createMemberHandler: this.buildMemberHandlerFactory(resolvedMessageContext, gatewayOpId),
+      createMemberHandler: memberRegistry.createMemberHandler,
       ownerHandler: eventHandler,
       ownerOperationId: result.operationId,
     });
@@ -1409,10 +1429,10 @@ export class GatewayActionImpl {
       gatewayUrl: agentGatewayUrl,
       onEvent: eventRouter,
       onSessionComplete: ({ authFailed, completion, succeeded, terminalReceived }) => {
-        // The gateway event handler already completed the op via the shared run
-        // lifecycle on `agent_runtime_end` / `error`. Only complete here as the
-        // terminal-missing fallback so the op never sticks `running`.
-        if (!terminalReceived) this.#get().completeOperation(gatewayOpId);
+        // The supervisor's session is over, so no member event can still arrive
+        // on it: retire any member op whose own terminal was lost with the
+        // socket, or its column keeps the stop button and running bar alive.
+        memberRegistry.retireAll();
 
         // A terminal resume status is ambiguous only for an external hetero
         // producer: an older or degraded Gateway may have no initialized DO
@@ -1425,13 +1445,34 @@ export class GatewayActionImpl {
           !authFailed &&
           completion?.source === 'resume_status' &&
           result.heteroType !== null;
-        if (preserveExternalProducer) return;
+        if (preserveExternalProducer) {
+          if (!terminalReceived) this.#get().completeOperation(gatewayOpId);
+          return;
+        }
 
         const effectiveSucceeded = isSuccessfulGatewayCompletion({
           authFailed,
           completion,
           succeeded,
         });
+
+        // The gateway event handler already ran the shared run lifecycle on
+        // `agent_runtime_end` / `error`. When the session ended without one, run
+        // it here instead of only completing the op: the lifecycle is what
+        // drains messages the user queued behind this run, so a bare
+        // `completeOperation` stranded them in the queue tray for good.
+        if (!terminalReceived) {
+          void runLifecycle
+            .completeRun({
+              context: resolvedMessageContext,
+              operationId: gatewayOpId,
+              runId: gatewayOpId,
+              runScope,
+              runtimeType: 'gateway',
+              status: effectiveSucceeded ? 'completed' : 'cancelled',
+            })
+            .catch(console.error);
+        }
 
         if (result.topicId) {
           // The server already settled this topic: the runtime's `finish`
@@ -1462,8 +1503,7 @@ export class GatewayActionImpl {
           // `markTopicUnread` owns. Ownership-guarded on its own (see
           // clearLocalRunningOperation), so it is safe to call either way.
           this.clearLocalRunningOperation({
-            agentId: resolvedMessageContext.agentId,
-            groupId: resolvedMessageContext.groupId,
+            ...topicOwnerOf(resolvedMessageContext),
             operationId: result.operationId,
             status: viewing || !effectiveSucceeded ? 'active' : undefined,
             topicId: result.topicId,
@@ -1504,6 +1544,13 @@ export class GatewayActionImpl {
      */
     agentShareId?: string;
     assistantMessageId: string;
+    /**
+     * Present when the run is a group chat's supervisor. Keys the reconnected
+     * stream (and its members' forwarded events) into the group's
+     * `group_<g>_<topic>` bucket — without it they land in a per-agent bucket
+     * the group page never renders.
+     */
+    groupId?: string;
     heteroType?: string | null;
     operationId: string;
     scope?: string;
@@ -1516,8 +1563,16 @@ export class GatewayActionImpl {
     threadId?: string | null;
     topicId: string;
   }): Promise<void> => {
-    const { agentShareId, assistantMessageId, heteroType, operationId, topicId, scope, threadId } =
-      params;
+    const {
+      agentShareId,
+      assistantMessageId,
+      groupId,
+      heteroType,
+      operationId,
+      topicId,
+      scope,
+      threadId,
+    } = params;
 
     const agentGatewayUrl = getGatewayServerConfig()?.agentGatewayUrl;
     if (!agentGatewayUrl) return;
@@ -1551,7 +1606,8 @@ export class GatewayActionImpl {
     const context = {
       agentId,
       ...(agentShareId && { agentShareId }),
-      scope: (scope ?? 'main') as ConversationContext['scope'],
+      ...(groupId && { groupId }),
+      scope: (scope ?? (groupId ? 'group' : 'main')) as ConversationContext['scope'],
       threadId: threadId ?? null,
       topicId,
     };
@@ -1618,7 +1674,7 @@ export class GatewayActionImpl {
       await interruptGatewayTaskOrThrow({ operationId });
 
       this.#settleLocalTopicAfterConfirmedStop({
-        agentId: context.agentId,
+        ...topicOwnerOf(context),
         operationId,
         topicId,
       });
@@ -1644,7 +1700,7 @@ export class GatewayActionImpl {
       this.#get().completeOperation(gatewayOpId);
 
       if (isTrpcErrorCode(error, 'NOT_FOUND')) {
-        this.clearLocalRunningOperation({ operationId, topicId });
+        this.clearLocalRunningOperation({ ...topicOwnerOf(context), operationId, topicId });
         return;
       }
       throw error;
@@ -1660,6 +1716,15 @@ export class GatewayActionImpl {
       return;
     }
 
+    const runScope = (context.scope === 'sub_agent' ? 'sub_agent' : 'top_level') as RunScope;
+    const runLifecycle = buildRunLifecycle(this.#get, {
+      context,
+      parentMessageId: assistantMessageId,
+      parentMessageType: 'assistant',
+      runId: gatewayOpId,
+      runScope,
+      runtimeType: 'gateway',
+    });
     const eventHandler = createGatewayEventHandler(this.#get, {
       assistantMessageId,
       context,
@@ -1667,21 +1732,15 @@ export class GatewayActionImpl {
       // the same WS that gatewayConnections is keyed on.
       gatewayOperationId: operationId,
       operationId: gatewayOpId,
-      runLifecycle: buildRunLifecycle(this.#get, {
-        context,
-        parentMessageId: assistantMessageId,
-        parentMessageType: 'assistant',
-        runId: gatewayOpId,
-        runScope: (context.scope === 'sub_agent' ? 'sub_agent' : 'top_level') as RunScope,
-        runtimeType: 'gateway',
-      }),
+      runLifecycle,
     });
 
     // Same demux as the initial-run path: a reconnected supervisor WS can also
     // receive forwarded member events, so route them away from the supervisor
     // handler (and stream them when the reconnect context carries the group).
+    const memberRegistry = this.buildMemberRegistry(context, gatewayOpId);
     const eventRouter = createGatewayEventRouter({
-      createMemberHandler: this.buildMemberHandlerFactory(context, gatewayOpId),
+      createMemberHandler: memberRegistry.createMemberHandler,
       ownerHandler: eventHandler,
       ownerOperationId: operationId,
     });
@@ -1693,6 +1752,10 @@ export class GatewayActionImpl {
       gatewayUrl: agentGatewayUrl,
       onEvent: eventRouter,
       onSessionComplete: ({ authFailed, completion, succeeded, terminalReceived }) => {
+        // Same as the initial-run path: members cannot outlive the supervisor's
+        // session.
+        memberRegistry.retireAll();
+
         // A reconnect-local operation has no remaining work once the session
         // completion callback fires. Real streamed terminals are completed by
         // the shared run lifecycle; every terminal-missing fallback (including
@@ -1724,7 +1787,7 @@ export class GatewayActionImpl {
         // newer run may own this topic by now, and the settle below would
         // retire it mid-flight.
         const superseded = this.#isSupersededRunningOperation({
-          agentId: context.agentId,
+          ...topicOwnerOf(context),
           operationId,
           topicId,
         });
@@ -1767,7 +1830,7 @@ export class GatewayActionImpl {
         // read. Status omitted for the unwatched-clean case, which
         // `markTopicUnread` owns locally; same split as the primary path.
         this.clearLocalRunningOperation({
-          agentId: context.agentId,
+          ...topicOwnerOf(context),
           operationId,
           status: viewing || !effectiveSucceeded ? 'active' : undefined,
           topicId,
@@ -1782,39 +1845,27 @@ export class GatewayActionImpl {
   };
 
   /**
-   * Build the `createMemberHandler` factory for a run's event router, with a
-   * single memoized group-tree hydration shared across all of that run's member
-   * handlers. The first member to stream triggers one `getMessages` +
-   * `replaceMessages` so the canonical council structure (the `agentCouncil` tool
-   * message + every member row) lands — which is what makes the members render as
-   * parallel columns rather than a stack — and concurrent members reuse the same
-   * promise instead of each re-replacing the bucket and clobbering live content.
+   * The member handlers of one supervisor run (see `createGatewayMemberRegistry`).
+   * The first member to stream hydrates the group tree once so the canonical
+   * council structure (the `agentCouncil` tool message + every member row)
+   * lands — which is what makes the members render as parallel columns rather
+   * than a stack — and later reads are shared single-flight so concurrent
+   * members don't clobber each other's live content.
    */
-  private buildMemberHandlerFactory = (
-    context: ConversationContext,
-    parentOperationId: string,
-  ): ((memberOperationId: string) => (event: AgentStreamEvent) => void) => {
-    let hydration: Promise<void> | undefined;
-    const ensureGroupHydrated = () => {
-      if (!hydration) {
-        hydration = messageService
-          .getMessages(context)
-          .then((messages) => {
-            this.#get().replaceMessages(messages, { context });
-          })
+  private buildMemberRegistry = (context: ConversationContext, parentOperationId: string) =>
+    createGatewayMemberRegistry(this.#get, {
+      context,
+      fetchMessages: (target) => messageService.getMessages(target),
+      // An isolated member's thread is new to the sidebar when it starts and
+      // changes status when it ends.
+      onThreadActivity: () => {
+        if (this.#get().activeTopicId !== context.topicId) return;
+        void this.#get()
+          .refreshThreads?.()
           .catch(() => {});
-      }
-      return hydration;
-    };
-
-    return (memberOperationId: string) =>
-      createGatewayMemberStreamHandler(this.#get, {
-        context,
-        ensureGroupHydrated,
-        memberOperationId,
-        parentOperationId,
-      });
-  };
+      },
+      parentOperationId,
+    });
 
   /**
    * Clear the client-store copy of `topic.metadata.runningOperation`.
@@ -1853,17 +1904,48 @@ export class GatewayActionImpl {
     groupId?: string;
     operationId: string;
     topicId: string;
+    topicScope?: TopicMapScope;
   }): boolean => {
-    const { agentId, groupId, operationId, topicId } = params;
+    const { agentId, groupId, operationId, topicId, topicScope } = params;
+    const key = this.#topicBucketKey({ agentId, groupId, topicScope });
     const state = this.#get();
-    const key = topicMapKey({
-      agentId: agentId ?? state.activeAgentId,
-      groupId: groupId ?? state.activeGroupId,
-    });
     const owner = state.topicDataMap[key]?.items?.find((t) => t.id === topicId)?.metadata
       ?.runningOperation?.operationId;
 
     return !!owner && owner !== operationId;
+  };
+
+  /**
+   * The topic-list bucket a run's topic lives in. Without an explicit scope the
+   * active agent / group fill in, as the topic slice's own helpers do.
+   */
+  #topicBucketKey = (params: {
+    agentId?: string;
+    groupId?: string;
+    topicScope?: TopicMapScope;
+  }): string => {
+    const { agentId, groupId, topicScope } = params;
+    if (topicScope) return topicMapKey({ agentId, groupId, scope: topicScope });
+    const state = this.#get();
+    return topicMapKey({
+      agentId: agentId ?? state.activeAgentId,
+      groupId: groupId ?? state.activeGroupId,
+    });
+  };
+
+  /**
+   * Whether another top-level Gateway run is still live on this topic. Member
+   * ops (children of a Gateway run) belong to their supervisor and don't count.
+   */
+  #hasOtherLiveRun = (params: { operationId: string; topicId: string }): boolean => {
+    const { operations } = this.#get();
+    return Object.values(operations).some((op) => {
+      if (op.status !== 'running' || op.type !== 'execServerAgentRuntime') return false;
+      if (op.context.topicId !== params.topicId) return false;
+      if (op.metadata?.serverOperationId === params.operationId) return false;
+      const parent = op.parentOperationId ? operations[op.parentOperationId] : undefined;
+      return parent?.type !== 'execServerAgentRuntime';
+    });
   };
 
   /**
@@ -1887,6 +1969,7 @@ export class GatewayActionImpl {
     groupId?: string;
     operationId: string;
     topicId: string;
+    topicScope?: TopicMapScope;
   }): void => {
     this.clearLocalRunningOperation({ ...params, status: 'active' });
   };
@@ -1902,24 +1985,40 @@ export class GatewayActionImpl {
      */
     status?: ChatTopicStatus;
     topicId: string;
+    /** Pin the owning bucket's scope instead of inferring it — see `topicOwnerOf`. */
+    topicScope?: TopicMapScope;
   }): void => {
-    const { topicId, operationId, agentId, groupId, status } = params;
+    const { topicId, operationId, agentId, groupId, status, topicScope } = params;
     const state = this.#get();
-    const key = topicMapKey({
-      agentId: agentId ?? state.activeAgentId,
-      groupId: groupId ?? state.activeGroupId,
-    });
+    const key = this.#topicBucketKey({ agentId, groupId, topicScope });
     const existingTopic = state.topicDataMap[key]?.items?.find((t) => t.id === topicId);
+    const markerOperationId = existingTopic?.metadata?.runningOperation?.operationId;
     // Same ownership guard the removed client-side `superseded` check used to
     // provide: if a newer run already overwrote this topic's local marker with
     // its own operationId, this stale session's completion must not clobber it
     // (neither the metadata clear nor, now, the status write).
-    if (existingTopic?.metadata?.runningOperation?.operationId !== operationId) return;
+    if (markerOperationId !== operationId) {
+      // A run on a topic the store had no marker for — typically a brand-new
+      // topic, whose optimistic marker is only written over a stale one — has
+      // no marker to clear, but its start still pinned the row `running`.
+      // Without this the sidebar spinner outlives the run until a reload.
+      if (
+        !markerOperationId &&
+        status &&
+        existingTopic?.status === 'running' &&
+        !this.#hasOtherLiveRun({ operationId, topicId })
+      ) {
+        state.internal_pinTopicStatus?.({ agentId, groupId, scope: topicScope, status, topicId });
+      }
+      return;
+    }
+    if (!existingTopic) return;
 
     state.internal_dispatchTopic({
       agentId,
       groupId,
       id: topicId,
+      scope: topicScope,
       type: 'updateTopic',
       value: { metadata: { ...existingTopic.metadata, runningOperation: null } },
     });
@@ -1930,7 +2029,7 @@ export class GatewayActionImpl {
     // run start) reconciles to this status instead of reapplying the stale
     // 'running' one and stranding the spinner again.
     if (status) {
-      state.internal_pinTopicStatus?.({ agentId, groupId, status, topicId });
+      state.internal_pinTopicStatus?.({ agentId, groupId, scope: topicScope, status, topicId });
     }
   };
 
