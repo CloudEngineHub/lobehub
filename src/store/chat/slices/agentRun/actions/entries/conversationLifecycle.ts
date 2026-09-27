@@ -60,7 +60,6 @@ import {
   agentSelectors,
   chatConfigByIdSelectors,
 } from '@/store/agent/selectors';
-import { agentGroupByIdSelectors, getChatGroupStoreState } from '@/store/agentGroup';
 import { getPendingTopicRepos } from '@/store/chat/pendingTopicRepos';
 import {
   dbMessageSelectors,
@@ -112,6 +111,7 @@ import { useUserMemoryStore } from '@/store/userMemory';
 import { markdownToTxt } from '@/utils/markdownToTxt';
 import { aggregateSubagentMetrics } from '@/utils/subagentMetrics';
 
+import { isGroupSupervisor as isGroupSupervisorAgent } from '../dispatch/groupSupervisorContext';
 import { materializeLocalSystemToolSnapshots } from '../transports/client/localSystemToolSnapshots';
 import type { CommandSendOverrides } from './commandBus';
 import {
@@ -553,11 +553,7 @@ export class ConversationLifecycleActionImpl {
 
     // When creating new thread, override threadId to undefined (server will create it)
     // Check if current agentId is the supervisor agent of the group
-    let isGroupSupervisor = false;
-    if (context.groupId) {
-      const group = agentGroupByIdSelectors.groupById(context.groupId)(getChatGroupStoreState());
-      isGroupSupervisor = group?.supervisorAgentId === agentId;
-    }
+    const isGroupSupervisor = isGroupSupervisorAgent(context.groupId, agentId);
     // In non-group context, @agent mentions make the current agent act as supervisor
     const hasMentionedAgents =
       !context.groupId && !directMentionRoute && mentionedAgents.length > 0;

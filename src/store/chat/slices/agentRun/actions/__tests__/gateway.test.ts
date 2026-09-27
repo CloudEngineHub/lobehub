@@ -8,6 +8,7 @@ import { aiAgentService } from '@/services/aiAgent';
 import { messageService } from '@/services/message';
 import { shareChatService } from '@/services/shareChat';
 import { topicService } from '@/services/topic';
+import { getChatGroupStoreState, useAgentGroupStore } from '@/store/agentGroup';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
 import * as serverConfigStore from '@/store/serverConfig';
 
@@ -955,6 +956,99 @@ describe('GatewayActionImpl', () => {
         }),
         expect.anything(),
       );
+    });
+
+    // G-06: only the first send stamped `orchestrationRole: 'supervisor'`, so
+    // regenerate / approve / reject-continue (which pass the bare conversation
+    // context) re-ran the group supervisor without its orchestration tools.
+    describe('group supervisor role', () => {
+      const groupId = 'cg_team';
+      const execResult = {
+        agentId: 'agt_sup',
+        assistantMessageId: 'ast-1',
+        autoStarted: true,
+        createdAt: new Date().toISOString(),
+        message: 'ok',
+        operationId: 'server-op-1',
+        status: 'created',
+        success: true,
+        timestamp: new Date().toISOString(),
+        token: 'test-token',
+        topicId: 'topic-1',
+        userMessageId: 'usr-1',
+      } as const;
+      let previousGroupMap: ReturnType<typeof getChatGroupStoreState>['groupMap'];
+
+      beforeEach(() => {
+        previousGroupMap = getChatGroupStoreState().groupMap;
+        useAgentGroupStore.setState({
+          groupMap: {
+            ...previousGroupMap,
+            [groupId]: { id: groupId, supervisorAgentId: 'agt_sup' } as any,
+          },
+        });
+        vi.mocked(aiAgentService.execAgentTask).mockResolvedValue(execResult as any);
+      });
+
+      afterEach(() => {
+        useAgentGroupStore.setState({ groupMap: previousGroupMap });
+      });
+
+      const sentRole = () =>
+        vi.mocked(aiAgentService.execAgentTask).mock.calls.at(-1)?.[0].appContext
+          ?.orchestrationRole;
+
+      it.each([
+        ['regenerate', { parentMessageId: 'user-msg-1', message: 'Original question' }],
+        ['approve resume', { parentMessageId: 'tool-msg-1', message: '' }],
+      ])(
+        'runs the group supervisor as supervisor on %s',
+        async (_entry, { message, parentMessageId }) => {
+          const { action } = createExecuteTestAction();
+
+          await action.executeGatewayAgent({
+            context: {
+              agentId: 'agt_sup',
+              groupId,
+              scope: 'group',
+              threadId: null,
+              topicId: 'topic-1',
+            },
+            message,
+            parentMessageId,
+          });
+
+          expect(sentRole()).toBe('supervisor');
+        },
+      );
+
+      it('does not promote a group member to supervisor', async () => {
+        const { action } = createExecuteTestAction();
+
+        await action.executeGatewayAgent({
+          context: {
+            agentId: 'agt_carol',
+            groupId,
+            scope: 'group',
+            threadId: null,
+            topicId: 'topic-1',
+          },
+          message: 'hi',
+        });
+
+        expect(sentRole()).toBeUndefined();
+      });
+
+      it('leaves a non-group run without a role', async () => {
+        const { action } = createExecuteTestAction();
+
+        await action.executeGatewayAgent({
+          context: { agentId: 'agt_sup', scope: 'main', threadId: null, topicId: 'topic-1' },
+          message: 'hi',
+        });
+
+        expect(sentRole()).toBeUndefined();
+      });
     });
 
     it('should not include parentMessageId when not provided (normal send)', async () => {

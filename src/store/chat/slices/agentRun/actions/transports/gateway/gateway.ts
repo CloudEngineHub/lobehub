@@ -63,6 +63,7 @@ import {
 } from '@/store/user/selectors';
 import { isTrpcErrorCode } from '@/utils/trpcError';
 
+import { resolveGroupOrchestrationRole } from '../../dispatch/groupSupervisorContext';
 import { resolveNewThreadIntent } from '../../dispatch/newThreadIntent';
 import { buildRunLifecycle } from '../../lifecycle/buildRunLifecycle';
 import type { RunScope } from '../../lifecycle/types';
@@ -1018,7 +1019,7 @@ export class GatewayActionImpl {
                 // the assistant message metadata. Without this the gateway-created
                 // supervisor turn loses its role on the step_start snapshot / refetch
                 // and renders as a generic assistant.
-                orchestrationRole: executionContext.orchestrationRole,
+                orchestrationRole: resolveGroupOrchestrationRole(executionContext),
                 scope: executionContext.scope,
                 taskId,
                 threadId: executionContext.threadId,
