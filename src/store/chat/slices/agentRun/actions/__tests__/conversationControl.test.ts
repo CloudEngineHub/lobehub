@@ -1695,6 +1695,31 @@ describe('ConversationControl actions', () => {
       );
     });
 
+    // A stopped group member's card stayed on screen until a reload: its stop
+    // ends no stream this client listens on, so no refetch lands the aborted row.
+    it('settles the stopped card locally', async () => {
+      const { result } = renderHook(() => useChatStore());
+      seedDurableTerminalCard(result);
+      vi.spyOn(result.current, 'executeGatewayAgent').mockResolvedValue({} as any);
+      vi.mocked(lambdaClient.aiAgent.resolveAgentInterventionBySource.mutate).mockResolvedValueOnce(
+        {
+          contractVersion: 2,
+          state: 'claimed',
+          status: 'stopped',
+          success: true,
+        },
+      );
+
+      await act(async () => {
+        await result.current.stopPendingApproval(['tool-msg-terminal-source']);
+      });
+
+      const row = result.current.dbMessagesMap[chatKey].find(
+        (message) => message.id === 'tool-msg-terminal-source',
+      );
+      expect(row?.pluginIntervention?.status).toBe('aborted');
+    });
+
     it('completes only the local action when custom cancel wins the durable claim', async () => {
       const { result } = renderHook(() => useChatStore());
       const pausedOperationId = seedDurableTerminalCard(result);

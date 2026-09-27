@@ -1017,6 +1017,12 @@ export class ConversationControlActionImpl {
           topicId,
         });
       }
+      // Settle the cards locally. A group member's stop ends no stream this
+      // client still listens on, so no refetch would ever land the aborted rows
+      // and the card would stay on screen until a reload.
+      for (const id of addressable) {
+        this.#dispatchInterventionState(id, { status: 'aborted' }, { context: effectiveContext });
+      }
       this.#completeOpsById(pausedOpIds);
     } catch (error) {
       console.error('[stopPendingApproval] failed:', error);
