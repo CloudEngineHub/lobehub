@@ -38,13 +38,8 @@ const wrap = (command: string, extraEnv = '') =>
     `${CREDS}${extraEnv} exec npx -y @lobehub/cli "$@"`,
     '__LOBEHUB_LH_SHIM__',
     '(',
+    `trap 'jobs -p > "$__lobehub_lh_bin"/.jobs; if [ -s "$__lobehub_lh_bin"/.jobs ]; then (n=0; while read -r p; do while [ "$n" -lt 300 ] && kill -0 "$p" 2>/dev/null; do case "$(cat /proc/"$p"/stat 2>/dev/null)" in *") Z "*) break ;; esac; sleep 1; n=$((n + 1)); done; done < "$__lobehub_lh_bin"/.jobs; rm -rf "$__lobehub_lh_bin") >/dev/null 2>&1 </dev/null & fi' EXIT`,
     command,
-    '__lobehub_lh_status=$?',
-    'jobs -p > "$__lobehub_lh_bin"/.jobs',
-    'if [ -s "$__lobehub_lh_bin"/.jobs ]; then',
-    `  (n=0; while read -r p; do while [ "$n" -lt 300 ] && kill -0 "$p" 2>/dev/null; do case "$(cat /proc/"$p"/stat 2>/dev/null)" in *") Z "*) break ;; esac; sleep 1; n=$((n + 1)); done; done < "$__lobehub_lh_bin"/.jobs; rm -rf "$__lobehub_lh_bin") >/dev/null 2>&1 </dev/null &`,
-    'fi',
-    'exit "$__lobehub_lh_status"',
     ')',
   ].join('\n');
 
@@ -236,6 +231,18 @@ describe('preprocessLhCommand in a real shell', () => {
   it('keeps the wrapper for an lh started in the background after the script ends', async () => {
     const out = path.join(fakeBin, 'background.out');
     await run(`(sleep 1; lh whoami > '${out}') &`);
+
+    expect(readFileSync(out, 'utf8')).toBe('cli jwt=mock-jwt-token\n');
+  });
+
+  // Regression: the job hand-off ran after the command, so an `exit` or a
+  // `set -e` failure skipped it and the wrapper was removed under the job.
+  it.each([
+    ['an explicit exit', 'exit 0'],
+    ['a set -e failure', 'set -e; false'],
+  ])('keeps the wrapper for a background lh after %s', async (_label, ending) => {
+    const out = path.join(fakeBin, `after-exit-${ending.length}.out`);
+    await run(`(sleep 1; lh whoami > '${out}') & ${ending}`).catch(() => undefined);
 
     expect(readFileSync(out, 'utf8')).toBe('cli jwt=mock-jwt-token\n');
   });

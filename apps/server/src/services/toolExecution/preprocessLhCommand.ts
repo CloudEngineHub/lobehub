@@ -89,7 +89,6 @@ export const buildDeviceLhEnv = (
 /** Shell variable holding the per-command directory the `lh` wrapper is written to. */
 const LH_SHIM_DIR_VAR = '__lobehub_lh_bin';
 const LH_SHIM_EOF = '__LOBEHUB_LH_SHIM__';
-const LH_STATUS_VAR = '__lobehub_lh_status';
 
 /**
  * Longest the watcher keeps the wrapper for background jobs: the lifetime of
@@ -233,18 +232,16 @@ export const preprocessLhCommand = async (
       `${envAssignments} exec npx -y @lobehub/cli "$@"`,
       LH_SHIM_EOF,
       // A subshell, so the command's own `trap … EXIT` or `exit` cannot skip the
-      // cleanup, and it exits with the command's own status. Jobs it left in
-      // the background may still exec `lh`, so instead of joining them (which
+      // outer cleanup, and it exits with the command's own status. Jobs it left
+      // in the background may still exec `lh`, so instead of joining them (which
       // would block on a long-lived server) a detached watcher removes the
-      // wrapper once they have all exited.
+      // wrapper once they have all exited. That hand-off runs from the
+      // subshell's EXIT trap so an `exit` or `set -e` in the command cannot skip
+      // it; a command that replaces this trap only loses the hand-off, never the
+      // cleanup.
       '(',
+      `trap 'jobs -p > ${dir}/.jobs; if [ -s ${dir}/.jobs ]; then ${lhWrapperWatcher(dir)} fi' EXIT`,
       command,
-      `${LH_STATUS_VAR}=$?`,
-      `jobs -p > ${dir}/.jobs`,
-      `if [ -s ${dir}/.jobs ]; then`,
-      `  ${lhWrapperWatcher(dir)}`,
-      'fi',
-      `exit "$${LH_STATUS_VAR}"`,
       ')',
     ].join('\n');
 
