@@ -67,4 +67,60 @@ describe('buildServerAgentMemberRunner', () => {
       }),
     );
   });
+
+  // An approved group tool resumes on its own pending row (`call_tool` with
+  // `skipCreateToolMessage`). Writing a second row with the same tool_call_id
+  // under it rendered as an orphan skill call with a delete button.
+  it('reuses the approved pending tool row instead of writing a duplicate', async () => {
+    const execGroupMember = vi.fn().mockResolvedValue({ operationId: 'op-m', started: true });
+    const messageModel = {
+      create: vi.fn().mockResolvedValue({ id: 'new-row' }),
+      findById: vi.fn().mockResolvedValue({ id: 'approved-tool', parentId: 'sup-msg-1' }),
+      updateMetadata: vi.fn(),
+      updatePluginState: vi.fn(),
+      updateToolMessage: vi.fn(),
+    };
+    const ctx = {
+      execGroupMember,
+      messageModel,
+      operationId: 'op-sup',
+      topicId: 'topic-1',
+    } as unknown as RuntimeExecutorContext;
+    const state = {
+      origin: { agentId: 'agt_sup', groupId: 'group-1', topicId: 'topic-1' },
+    } as unknown as AgentState;
+
+    const runner = buildServerAgentMemberRunner(
+      ctx,
+      state,
+      {
+        apiName: 'executeAgentTask',
+        arguments: '{}',
+        id: 'call_1',
+        identifier: 'lobe-group-management',
+        type: 'builtin',
+      },
+      'approved-tool',
+      'approved-tool',
+    );
+    await runner!.run({
+      members: [{ agentId: 'agt_carol', instruction: 'go' }],
+      mode: 'isolated',
+      onComplete: 'resume',
+    });
+
+    expect(messageModel.create).not.toHaveBeenCalled();
+    expect(messageModel.updatePluginState).toHaveBeenCalledWith('approved-tool', {
+      expectedMembers: 1,
+      onComplete: 'resume',
+      status: 'pending',
+    });
+    expect(execGroupMember).toHaveBeenCalledWith(
+      expect.objectContaining({
+        anchorMessageId: 'approved-tool',
+        groupToolMessageId: 'approved-tool',
+        supervisorMessageId: 'sup-msg-1',
+      }),
+    );
+  });
 });
