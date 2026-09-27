@@ -1,10 +1,11 @@
 import { createHmac } from 'node:crypto';
 
-import type { MachinePaymentRecordParams } from '@lobechat/business-server/machine-payments/types';
 import { Hono, type MiddlewareHandler } from 'hono';
 import { Challenge, Credential, Method, Store, z } from 'mppx';
 import { Mppx } from 'mppx/server';
 import { beforeEach, describe, expect, it } from 'vitest';
+
+import type { MachinePaymentRecordParams } from '@/business/server/machine-payments/types';
 
 import { machinePayment, type MachinePaymentConfig, requirePaymentOr } from './machine-payment';
 
@@ -346,7 +347,7 @@ describe('machinePayment', () => {
           currency: 'usd',
           reference: expect.stringContaining('ref_'),
           route: 'GET /search',
-          source: 'did:test:agent-001',
+          claimedSource: 'did:test:agent-001',
         },
       ]);
     });

@@ -1,11 +1,12 @@
+import debug from 'debug';
+import type { MiddlewareHandler } from 'hono';
+import { Credential, Receipt } from 'mppx';
+
 import type {
   MachinePaymentPrice,
   MachinePaymentPriceParams,
   MachinePaymentRecordParams,
-} from '@lobechat/business-server/machine-payments/types';
-import debug from 'debug';
-import type { MiddlewareHandler } from 'hono';
-import { Credential, Receipt } from 'mppx';
+} from '@/business/server/machine-payments/types';
 
 const log = debug('lobe-hono:machine-payment');
 
@@ -32,6 +33,12 @@ export interface MachinePaymentMppx {
 export interface MachinePaymentConfig {
   /** Canonical `name/intent` key of the configured method, e.g. `stripe/charge`. */
   methodKey: string;
+  /**
+   * Must carry replay protection. mppx core never dedupes credentials — that is
+   * the payment method's job (e.g. `tempo.charge()` only protects when given a
+   * `store`). Without it, one credential settles on every request that repeats
+   * it.
+   */
   mppx: MachinePaymentMppx;
   /**
    * Invoked once per settlement, before the handler runs.
@@ -152,7 +159,7 @@ export const machinePayment = (config: MachinePaymentConfig): MiddlewareHandler 
         currency: settled.currency ?? price.currency,
         reference: receiptHeader ? Receipt.deserialize(receiptHeader).reference : '',
         route,
-        ...(settled.source ? { source: settled.source } : {}),
+        ...(settled.claimedSource ? { claimedSource: settled.claimedSource } : {}),
       });
     } catch (error) {
       log(
@@ -169,13 +176,15 @@ export const machinePayment = (config: MachinePaymentConfig): MiddlewareHandler 
 
 interface SettledCredential {
   amount?: string;
+  claimedSource?: string;
   currency?: string;
-  source?: string;
 }
 
 /**
- * What the settled credential itself declares — the authoritative record of
- * what was charged and who paid.
+ * What the settled credential itself declares. The amount and currency are
+ * authoritative — mppx binds them into the verified challenge. The payer is
+ * not: `source` is caller-supplied and only as trustworthy as the payment
+ * method's verification of it, so it is surfaced as a claim.
  *
  * Never throws: the credential already verified, so a parse failure here only
  * means those details are unknown. Failing a settled request over unreadable
@@ -189,7 +198,7 @@ const settlementOf = (request: Request): SettledCredential => {
     return {
       ...(typeof charged?.amount === 'string' ? { amount: charged.amount } : {}),
       ...(typeof charged?.currency === 'string' ? { currency: charged.currency } : {}),
-      ...(credential.source ? { source: credential.source } : {}),
+      ...(credential.source ? { claimedSource: credential.source } : {}),
     };
   } catch {
     return {};

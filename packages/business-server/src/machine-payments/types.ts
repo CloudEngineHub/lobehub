@@ -26,6 +26,15 @@ export interface MachinePaymentPrice {
 
 export interface MachinePaymentRecordParams {
   amount: string;
+  /**
+   * Payer identity as *claimed* by the credential's `source` field.
+   *
+   * Untrusted: the protocol does not authenticate `source`, so it is only as
+   * trustworthy as the configured payment method's verification of it. A method
+   * that verifies payment without binding `source` lets a valid payer attribute
+   * usage to any identity. Do not treat it as an authenticated caller id.
+   */
+  claimedSource?: string;
   currency: string;
   /**
    * Method-native settlement reference taken from the receipt. Unique per
@@ -35,6 +44,4 @@ export interface MachinePaymentRecordParams {
    */
   reference: string;
   route: string;
-  /** Payer identity asserted by the credential (`source`). */
-  source?: string;
 }
