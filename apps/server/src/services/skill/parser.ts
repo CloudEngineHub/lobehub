@@ -41,6 +41,17 @@ export interface ParseZipOptions extends ParseSkillMdOptions {
   repackSkillZip?: boolean;
 }
 
+/** Inline Markdown → plain text: links keep their label, emphasis/code keep their content. */
+const toPlainText = (markdown: string): string =>
+  markdown
+    .replaceAll(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replaceAll(/`([^`]*)`/g, '$1')
+    .replaceAll(/(\*\*|__)(.+?)\1/g, '$2')
+    .replaceAll(/(?<![\w*])\*(?!\s)([^*]+)\*(?![\w*])/g, '$1')
+    .replaceAll(/\b_(?!\s)([^_]+)_\b/g, '$1')
+    .replaceAll(/~~(.+?)~~/g, '$1')
+    .trim();
+
 export class SkillParser {
   /**
    * Parse SKILL.md file content
@@ -253,8 +264,11 @@ export class SkillParser {
         .replaceAll(/!\[[^\]]*\]\([^)]*\)/g, '');
       if (!withoutImages.replaceAll(/[\s|]/g, '')) continue;
 
-      // Strip blockquote / list markers so the description is plain text
-      const text = line.replace(/^(?:>\s*)+/, '').replace(/^(?:[*+-]|\d+\.)\s+/, '');
+      // The description is shown as plain text: strip blockquote / list
+      // markers and inline Markdown, keeping the readable labels.
+      const text = toPlainText(
+        withoutImages.replace(/^(?:>\s*)+/, '').replace(/^(?:[*+-]|\d+\.)\s+/, ''),
+      );
       if (text) block.push(text);
     }
     flushBlock();

@@ -289,6 +289,16 @@ Some paragraph that must not become the description.`;
       expect(result.manifest.description).toBe('Real summary.');
     });
 
+    it('should derive a plain-text description from inline Markdown', () => {
+      const result = parser.parseSkillMd(
+        '# Stock Watcher\n\nA **fast** [stock watcher](https://example.com) for `A-share` prices, _lightweight_ and ~~noisy~~ quiet.\n',
+      );
+
+      expect(result.manifest.description).toBe(
+        'A fast stock watcher for A-share prices, lightweight and noisy quiet.',
+      );
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),
