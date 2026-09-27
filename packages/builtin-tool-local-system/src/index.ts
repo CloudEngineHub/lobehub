@@ -18,3 +18,4 @@ export {
   LocalSystemIdentifier,
   type RunCommandState,
 } from './types';
+export { LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET } from './workingDirectoryNotice';

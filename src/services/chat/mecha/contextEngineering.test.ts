@@ -1,8 +1,10 @@
 import { AgentBuilderIdentifier } from '@lobechat/builtin-tool-agent-builder';
+import { LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET } from '@lobechat/builtin-tool-local-system';
 import { type UIChatMessage } from '@lobechat/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as isCanUseFCModule from '@/helpers/isCanUseFC';
+import { resolveClientLocalSandbox } from '@/helpers/localSandbox';
 import { agentService } from '@/services/agent';
 import { agentDocumentService } from '@/services/agentDocument';
 import { useAgentStore } from '@/store/agent';
@@ -37,10 +39,16 @@ vi.hoisted(() => {
 
 // Mock VARIABLE_GENERATORS
 vi.mock('@/helpers/parserPlaceholder', () => ({
+  getEffectiveWorkingDirectoryPath: () => undefined,
   HOST_VARIABLE_GENERATORS: {
     username: () => 'TestUser',
     random: () => '12345',
+    workingDirectory: () => '(not specified, use user Home directory as default)',
   },
+}));
+
+vi.mock('@/helpers/localSandbox', () => ({
+  resolveClientLocalSandbox: vi.fn(() => ({ localSandbox: false, localSandboxNetwork: false })),
 }));
 
 vi.mock('@/services/agentDocument', () => ({
@@ -775,6 +783,34 @@ describe('contextEngineering', () => {
       expect(result.at(-1)?.content).toBe(
         'Tuesday, December 26, 2023 | Tuesday, December 26, 2023',
       );
+    });
+
+    it('does not promise a Home fallback to a sandboxed run without a working directory', async () => {
+      vi.mocked(resolveClientLocalSandbox).mockReturnValue({
+        localSandbox: true,
+        localSandboxNetwork: false,
+      });
+
+      const result = await contextEngineering({
+        agentId: 'agent-1',
+        messages: [
+          {
+            content: 'cwd={{workingDirectory}}',
+            createdAt: Date.now(),
+            id: 'sandbox-cwd-1',
+            role: 'user',
+            updatedAt: Date.now(),
+          },
+        ],
+        model: 'gpt-4',
+        provider: 'openai',
+      });
+
+      expect(result.at(-1)?.content).toBe(`cwd=${LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET}`);
+      vi.mocked(resolveClientLocalSandbox).mockReturnValue({
+        localSandbox: false,
+        localSandboxNetwork: false,
+      });
     });
 
     it('should process placeholder variables in array content', async () => {

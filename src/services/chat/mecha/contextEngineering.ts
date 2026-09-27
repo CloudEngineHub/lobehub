@@ -1,5 +1,6 @@
 import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import { AgentBuilderIdentifier } from '@lobechat/builtin-tool-agent-builder';
+import { LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET } from '@lobechat/builtin-tool-local-system';
 import { isDesktop } from '@lobechat/const';
 import type {
   AgentGroupConfig,
@@ -22,7 +23,11 @@ import debug from 'debug';
 
 import { getActiveWorkspaceId } from '@/business/client/hooks/useActiveWorkspaceId';
 import { isCanUseFC } from '@/helpers/isCanUseFC';
-import { HOST_VARIABLE_GENERATORS } from '@/helpers/parserPlaceholder';
+import { resolveClientLocalSandbox } from '@/helpers/localSandbox';
+import {
+  getEffectiveWorkingDirectoryPath,
+  HOST_VARIABLE_GENERATORS,
+} from '@/helpers/parserPlaceholder';
 import { getAgentStoreState } from '@/store/agent';
 import {
   agentByIdSelectors,
@@ -357,6 +362,12 @@ export const contextEngineering = async ({
     variables: {
       ...facts.variables,
       ...HOST_VARIABLE_GENERATORS,
+      // A fenced run without a directory cannot run commands at all (the device
+      // refuses them), so the Home fallback the host placeholder promises is wrong.
+      ...(resolveClientLocalSandbox(agentId).localSandbox && {
+        workingDirectory: () =>
+          getEffectiveWorkingDirectoryPath() ?? LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET,
+      }),
       // NOTICE(@nekomeowww): required by builtin-tool-memory/src/systemRole.ts —
       // the browser knows the effective effort (agent override, else the user
       // setting), which the agent row alone cannot tell.

@@ -1,4 +1,5 @@
 import type { AgentState, AgentWorldSnapshot, CallLLMPayload } from '@lobechat/agent-runtime';
+import { LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET } from '@lobechat/builtin-tool-local-system';
 import type { ResolvedToolSet } from '@lobechat/context-engine';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -302,5 +303,55 @@ describe('buildServerCallLlmContext - workspace context', () => {
     expect(serverMessagesEngineMock).toHaveBeenCalledWith(
       expect.not.objectContaining({ workspaceContext: expect.anything() }),
     );
+  });
+});
+
+describe('buildServerCallLlmContext - {{workingDirectory}} under Local Sandbox', () => {
+  const sandboxedAgent = {
+    ...agent,
+    agencyConfig: { executionTarget: 'local', localSandbox: true },
+  } as unknown as AgentWorldSnapshot['agent'];
+  const localPlan = { execution: { deviceId: 'device-1', kind: 'device', target: 'local' } };
+
+  const renderWorkingDirectory = async (overrides: Partial<AgentState>) => {
+    await buildServerCallLlmContext({
+      ctx: createCtx(),
+      llmPayload,
+      model: 'gpt-4',
+      provider: 'openai',
+      state: createState(overrides),
+      tooling,
+    });
+    return serverMessagesEngineMock.mock.calls[0][0].additionalVariables.workingDirectory;
+  };
+
+  it('says commands are refused instead of promising a Home fallback', async () => {
+    const workingDirectory = await renderWorkingDirectory({
+      binding: { device: { id: 'device-1', systemInfo: { homePath: '/Users/someone' } } },
+      plan: localPlan,
+      world: { agent: sandboxedAgent },
+    } as Partial<AgentState>);
+
+    expect(workingDirectory).toBe(LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET);
+  });
+
+  it('keeps a configured directory', async () => {
+    const workingDirectory = await renderWorkingDirectory({
+      binding: { device: { id: 'device-1', systemInfo: { workingDirectory: '/repo' } } },
+      plan: localPlan,
+      world: { agent: sandboxedAgent },
+    } as Partial<AgentState>);
+
+    expect(workingDirectory).toBe('/repo');
+  });
+
+  it('leaves unsandboxed runs on the default placeholder', async () => {
+    const workingDirectory = await renderWorkingDirectory({
+      binding: { device: { id: 'device-1', systemInfo: {} } },
+      plan: localPlan,
+      world: { agent },
+    } as Partial<AgentState>);
+
+    expect(workingDirectory).toBeUndefined();
   });
 });

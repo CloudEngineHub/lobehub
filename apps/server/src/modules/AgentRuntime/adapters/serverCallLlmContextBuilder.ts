@@ -5,6 +5,7 @@ import {
   selectExpertise,
 } from '@lobechat/agent-runtime';
 import { GroupAgentBuilderIdentifier } from '@lobechat/builtin-tool-group-agent-builder';
+import { LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET } from '@lobechat/builtin-tool-local-system';
 import { gatherContextFacts } from '@lobechat/mecha';
 import type { ChatStreamPayload } from '@lobechat/model-runtime';
 import { SpanStatusCode } from '@lobechat/observability-otel/api';
@@ -14,6 +15,7 @@ import {
   tracer as agentRuntimeTracer,
 } from '@lobechat/observability-otel/modules/agent-runtime';
 
+import { isLocalSandboxEnabled } from '@/helpers/executionTarget';
 import { serverMessagesEngine } from '@/server/modules/Mecha/ContextEngineering';
 import {
   createServerContextFactProviders,
@@ -137,6 +139,13 @@ export const buildServerCallLlmContext = async ({
     agentManagementContext: facts.step.agentManagementContext,
     additionalVariables: {
       ...state.binding?.device?.systemInfo,
+      // A fenced run without a directory cannot run commands at all, so don't
+      // let the default placeholder promise a Home fallback that never happens.
+      ...(!state.binding?.device?.systemInfo?.workingDirectory &&
+        state.plan?.execution &&
+        isLocalSandboxEnabled(agentConfig.agencyConfig, state.plan.execution.target) && {
+          workingDirectory: LOCAL_SANDBOX_WORKING_DIRECTORY_UNSET,
+        }),
       ...facts.variables,
       // Only override the generator's 'en-US' locale fallback when the user info
       // fetch actually resolved a language — an empty string would render blank.
