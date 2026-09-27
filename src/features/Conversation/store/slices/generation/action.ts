@@ -396,6 +396,29 @@ const captureRegenerateUserMessageSource = (
   };
 };
 
+/**
+ * The user turn a reply belongs to. A group round nests its later rows (member
+ * replies, the supervisor follow-up) under the supervisor or its tool results,
+ * so the direct parent is not always the user message.
+ */
+const findTurnUserMessageId = (
+  message: { parentId?: string | null },
+  dbMessages: { id: string; parentId?: string | null; role: string }[],
+): string | undefined => {
+  const byId = new Map(dbMessages.map((m) => [m.id, m]));
+  const visited = new Set<string>();
+  let parentId = message.parentId ?? undefined;
+
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = byId.get(parentId);
+    if (!parent || parent.role === 'user') return parentId;
+    parentId = parent.parentId ?? undefined;
+  }
+
+  return undefined;
+};
+
 const regenerateUserMessageFromSource = async (
   messageId: string,
   source: RegenerateUserMessageSource,
@@ -467,8 +490,12 @@ const regenerateUserMessageFromSource = async (
     // ConversationStore has switched context, the source falls back to the old
     // context's ChatStore bucket instead of observing the new topic.
     const dbMessages = readDbMessages();
-    const childrenCount = dbMessages.filter((m) => m.parentId === messageId).length;
-    const nextBranchIndex = childrenCount;
+    // Tool rows are inline members of an assistant turn, never branches — count
+    // exactly what BranchResolver indexes, or the new index lands one past the
+    // last branch and the resolver treats it as "branch still being created".
+    const nextBranchIndex = dbMessages.filter(
+      (m) => m.parentId === messageId && m.role !== 'tool',
+    ).length;
 
     // Switch to the new branch so the UI shows the incoming response immediately
     await chatStore.switchMessageBranch(messageId, nextBranchIndex, {
@@ -1089,8 +1116,18 @@ export const generationSlice: StateCreator<
     const currentMessage = displayMessages.find((c) => c.id === messageId);
     if (!currentMessage) return;
 
-    const userId = currentMessage.parentId;
+    const userId = findTurnUserMessageId(currentMessage, regenerationSource.readDbMessages());
     if (!userId) return;
+
+    // A group supervisor turn owns the whole round below it (tool results,
+    // member replies, the supervisor follow-up), and a row nested inside that
+    // round is only one part of it. Deleting just that row re-parents or
+    // strands the rest of the round, which then resolves to no branch. Keep the
+    // old round as a branch and regenerate the turn beside it.
+    if (currentMessage.role === 'supervisor' || currentMessage.parentId !== userId) {
+      await regenerateUserMessageFromSource(userId, regenerationSource);
+      return;
+    }
 
     // Create operation to track context (use 'regenerate' type since this is a regenerate action)
     const { operationId } = chatStore.startOperation({
@@ -1296,8 +1333,8 @@ export const generationSlice: StateCreator<
 
     if (!currentMessage) return;
 
-    // Find the parent user message
-    const userId = currentMessage.parentId;
+    // Find the user turn this reply belongs to
+    const userId = findTurnUserMessageId(currentMessage, get().dbMessages);
     if (!userId) return;
 
     // Delegate to regenerateUserMessage with the parent user message
