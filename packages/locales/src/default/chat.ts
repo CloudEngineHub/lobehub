@@ -359,6 +359,8 @@ export default {
   'group.profile.externalAgentWarning':
     'This is an external agent. Changes made here will directly modify the original agent configuration.',
   'group.profile.groupSettings': 'Group Settings',
+  'group.profile.memberGatewayModeIgnored':
+    "This member has Agent Gateway turned off in its own chat settings. In group chats, members run with the Orchestrator's runtime, so that setting only applies to direct chats.",
   'group.profile.supervisor': 'Orchestrator',
   'group.profile.supervisorPlaceholder':
     'The Orchestrator coordinates different agents. Setting Orchestrator information here enables more precise workflow coordination.',
