@@ -1,6 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { TRPCError } from '@trpc/server';
+import { and, eq, isNull } from 'drizzle-orm';
 
-import { agents, chatGroupsAgents } from '@/database/schemas';
+import { agents, chatGroups, chatGroupsAgents } from '@/database/schemas';
 import type { LobeChatDatabase } from '@/database/type';
 import { assertCanPerformResourceAction } from '@/server/services/resourcePermission';
 
@@ -66,6 +67,31 @@ export const getWorkspaceGroupVirtualAgentIds = async ({
   return [...new Set(rows.map((row) => row.agentId))];
 };
 
+const assertOwnPersonalGroup = async ({
+  db,
+  groupId,
+  userId,
+}: {
+  db: LobeChatDatabase;
+  groupId: string;
+  userId: string;
+}) => {
+  const group = await db.query.chatGroups.findFirst({
+    columns: { id: true },
+    where: and(
+      eq(chatGroups.id, groupId),
+      eq(chatGroups.userId, userId),
+      isNull(chatGroups.workspaceId),
+    ),
+  });
+  if (!group) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to use this resource',
+    });
+  }
+};
+
 /**
  * Workspace `use` guard for agent execution entrypoints.
  *
@@ -83,7 +109,14 @@ export const assertCanUseWorkspaceAgent = async ({
   userId,
   workspaceId,
 }: WorkspaceAgentGuardParams): Promise<void> => {
-  if (!workspaceId) return;
+  if (!workspaceId) {
+    // Personal space has no resource ACL, but an explicit group context still
+    // has to be the caller's own group: it is written onto the topic and
+    // messages and turns on the supervisor role, so a forged id would stamp
+    // someone else's group onto the caller's data.
+    if (groupId) await assertOwnPersonalGroup({ db, groupId, userId });
+    return;
+  }
   if (!agentId && !slug) return;
 
   let resourceId = agentId;
