@@ -63,6 +63,54 @@ describe('SearchService', () => {
     });
   });
 
+  describe('SEARCH_PROVIDERS parsing', () => {
+    it.each([
+      ['quotes kept by Compose list syntax', "'searxng'"],
+      ['double quotes', '"searxng"'],
+      ['zero-width space from a copied value', ' \u200Bsearxng'],
+      ['BOM and trailing zero-width joiner', '\uFEFFsearxng\u200D'],
+      ['uppercase', 'SearXNG'],
+    ])('should recognize searxng with %s', (_, value) => {
+      vi.mocked(toolsEnv).SEARCH_PROVIDERS = value;
+      vi.mocked(createSearchServiceImpl).mockClear();
+
+      new SearchService();
+
+      expect(createSearchServiceImpl).toHaveBeenCalledTimes(1);
+      expect(createSearchServiceImpl).toHaveBeenCalledWith(SearchImplType.SearXNG);
+    });
+
+    it('should drop unknown providers instead of falling back to Search1API', () => {
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(function () {});
+      vi.mocked(toolsEnv).SEARCH_PROVIDERS = 'serxng-typo,tavily';
+      vi.mocked(createSearchServiceImpl).mockClear();
+
+      new SearchService();
+      new SearchService();
+
+      expect(createSearchServiceImpl).toHaveBeenCalledTimes(2);
+      expect(createSearchServiceImpl).toHaveBeenCalledWith(SearchImplType.Tavily);
+      expect(createSearchServiceImpl).not.toHaveBeenCalledWith('serxng-typo');
+      // Warned once per id, not once per request
+      expect(consoleWarn).toHaveBeenCalledTimes(1);
+      expect(consoleWarn.mock.calls[0][0]).toContain('"serxng-typo"');
+      consoleWarn.mockRestore();
+    });
+
+    it('should use the default provider when every configured id is unknown', () => {
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(function () {});
+      vi.mocked(toolsEnv).SEARCH_PROVIDERS = 'unknown-only';
+      vi.mocked(createSearchServiceImpl).mockClear();
+
+      new SearchService();
+
+      expect(createSearchServiceImpl).toHaveBeenCalledTimes(1);
+      expect(createSearchServiceImpl).toHaveBeenCalledWith();
+      expect(SearchService.getAvailableChannels().searchProviders).toEqual([{ id: 'searxng' }]);
+      consoleWarn.mockRestore();
+    });
+  });
+
   describe('query', () => {
     it('should call searchImpl.query with correct parameters', async () => {
       const mockResponse = {
@@ -101,11 +149,14 @@ describe('SearchService', () => {
 
     it('should return errorDetail without logging sensitive provider details', async () => {
       const errorMessage = '401 Bearer sk-sensitive-token - upstream response body';
-      class TestSearchImpl {
-        query = vi.fn().mockRejectedValue(new Error(errorMessage));
+      // Production builds minify class names, so the log must carry the provider id
+      class x {
+        query = vi
+          .fn()
+          .mockRejectedValue(Object.assign(new Error(errorMessage), { code: 'UNAUTHORIZED' }));
       }
-      const testSearchImpl = new TestSearchImpl();
-      vi.mocked(createSearchServiceImpl).mockReturnValue(testSearchImpl as any);
+      vi.mocked(toolsEnv).SEARCH_PROVIDERS = 'searxng';
+      vi.mocked(createSearchServiceImpl).mockReturnValue(new x() as any);
       searchService = new SearchService();
       const consoleError = vi.spyOn(console, 'error').mockImplementation(function () {});
 
@@ -119,7 +170,8 @@ describe('SearchService', () => {
         results: [],
       });
       expect(consoleError).toHaveBeenCalledWith('[SearchService] query failed', {
-        provider: 'TestSearchImpl',
+        code: 'UNAUTHORIZED',
+        provider: 'searxng',
       });
 
       const loggedContent = JSON.stringify(consoleError.mock.calls);
