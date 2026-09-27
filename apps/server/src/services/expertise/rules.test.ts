@@ -81,6 +81,27 @@ describe('ExpertiseRuleDraftService', () => {
     expect(draft.newGroup).toEqual({ gate: '这条只对 lobehub 成立吗？', title: 'OSS 工程规范' });
   });
 
+  it('never hands back a draft that claims to be compiled already', async () => {
+    generateObject.mockResolvedValue({
+      compilability: 'compiled',
+      enforcement: 'remind',
+      groupId: 'g-design',
+      how: null,
+      limits: null,
+      newGroup: null,
+      title: '颜色一律取自设计系统变量',
+      why: null,
+    });
+
+    const draft = await new ExpertiseRuleDraftService({} as never, 'user_1').draftRule({
+      brief: '你应该用 cssVar 的吧',
+      groups,
+    });
+
+    // Only the compiler can make a rule `compiled`, by linking a criterion.
+    expect(draft.compilability).toBe('compilable');
+  });
+
   it('drafts a group as a name and a gate question', async () => {
     generateObject.mockResolvedValue({
       gate: '这条只对 lobehub 这个仓库成立，还是对任何仓库都成立？',

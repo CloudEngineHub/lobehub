@@ -346,11 +346,23 @@ export class ExpertiseModel {
    * many generations as there are. One level is not enough — merging a rule that was itself a
    * merge would otherwise keep the counts and lose the evidence.
    */
-  private resolveLineage = async (lessonId: string): Promise<string[]> => {
-    const root = await this.findLesson(lessonId);
-    if (!root) return [];
+  private resolveLineage = async (
+    lessonId: string,
+    db: Pick<LobeChatDatabase, 'select'> = this.db,
+  ): Promise<string[]> => {
+    const readLinks = (ids: string[]) =>
+      db
+        .select({
+          generalizedFromIds: expertiseLessons.generalizedFromIds,
+          salvagedFromId: expertiseLessons.salvagedFromId,
+        })
+        .from(expertiseLessons)
+        .innerJoin(expertiseDomains, eq(expertiseDomains.id, expertiseLessons.domainId))
+        .where(and(inArray(expertiseLessons.id, ids), this.scopeWhere()));
+
+    let frontier = await readLinks([lessonId]);
+    if (frontier.length === 0) return [];
     const seen = new Set<string>([lessonId]);
-    let frontier: Pick<typeof root, 'generalizedFromIds' | 'salvagedFromId'>[] = [root];
     // Bounded so a malformed cycle can never spin; real lineages are a handful of steps deep.
     for (let depth = 0; depth < 16 && frontier.length > 0; depth += 1) {
       const next = frontier
@@ -361,14 +373,7 @@ export class ExpertiseModel {
         .filter((id) => !seen.has(id));
       if (next.length === 0) break;
       for (const id of next) seen.add(id);
-      frontier = await this.db
-        .select({
-          generalizedFromIds: expertiseLessons.generalizedFromIds,
-          salvagedFromId: expertiseLessons.salvagedFromId,
-        })
-        .from(expertiseLessons)
-        .innerJoin(expertiseDomains, eq(expertiseDomains.id, expertiseLessons.domainId))
-        .where(and(inArray(expertiseLessons.id, next), this.scopeWhere()));
+      frontier = await readLinks(next);
     }
     return [...seen];
   };
@@ -877,7 +882,7 @@ export class ExpertiseModel {
    * been distilled, so there is no mechanism to claim yet.
    */
   createRule = async (params: {
-    compilability?: 'compiled' | 'compilable' | 'not-compilable';
+    compilability?: 'compilable' | 'not-compilable';
     domainId: string;
     enforcement?: ExpertiseEnforcement;
     how?: string;
@@ -929,7 +934,7 @@ export class ExpertiseModel {
   updateRule = async (
     lessonId: string,
     patch: {
-      compilability?: 'compiled' | 'compilable' | 'not-compilable';
+      compilability?: 'compilable' | 'not-compilable';
       enforcement?: ExpertiseEnforcement;
       reasonKind?: ExpertiseReasonKind;
       sections?: Partial<Record<'rule' | 'why' | 'how' | 'limits', string | null>>;
@@ -1106,13 +1111,23 @@ export class ExpertiseModel {
           falsePositiveCount: into.falsePositiveCount + from.falsePositiveCount,
           generalizedFromIds: [...(into.generalizedFromIds ?? []), fromId],
           hitCount: into.hitCount + from.hitCount,
-          hitRunCount: into.hitRunCount + from.hitRunCount,
           lastHitAt:
             from.lastHitAt && (!into.lastHitAt || from.lastHitAt > into.lastHitAt)
               ? from.lastHitAt
               : into.lastHitAt,
           updatedAt: new Date(),
         })
+        .where(eq(expertiseLessons.id, intoId));
+      // Runs are "distinct situations": two rules proven in the same delivery must count it
+      // once, so recount over the merged lineage instead of adding the two counters.
+      const lineage = await this.resolveLineage(intoId, tx);
+      const [{ runs }] = await tx
+        .select({ runs: sql<number>`count(distinct ${expertiseHits.runId})::int` })
+        .from(expertiseHits)
+        .where(inArray(expertiseHits.lessonId, lineage));
+      await tx
+        .update(expertiseLessons)
+        .set({ hitRunCount: runs })
         .where(eq(expertiseLessons.id, intoId));
       await tx
         .update(expertiseLessons)
@@ -1136,7 +1151,7 @@ export class ExpertiseModel {
    * drafting model proposes a group name without seeing which ones already exist in every case,
    * and two groups with the same name on one page are indistinguishable to the reader.
    */
-  createRuleGroup = async (params: { gate: string; title: string }) => {
+  createRuleGroup = async (params: { gate: string; outOfScope?: string; title: string }) => {
     const title = params.title.trim();
     const existing = await this.listDomainsForOwner();
     const match = existing.find(
@@ -1148,12 +1163,16 @@ export class ExpertiseModel {
       brief: title,
       carrier: { type: 'user' },
       domainFilter: params.gate,
+      outOfScope: params.outOfScope,
       title,
     });
   };
 
   /** Renames a group; the gate question can be changed the same way. */
-  updateRuleGroup = async (domainId: string, patch: { gate?: string; title?: string }) => {
+  updateRuleGroup = async (
+    domainId: string,
+    patch: { gate?: string; outOfScope?: string | null; title?: string },
+  ) => {
     const domain = await this.findDomain(domainId);
     if (!domain) return null;
     const title = patch.title?.trim();
@@ -1163,6 +1182,8 @@ export class ExpertiseModel {
       .set({
         ...(title && { title }),
         ...(gate && { domainFilter: gate }),
+        // Empty clears the exclusion; undefined leaves it alone.
+        ...(patch.outOfScope !== undefined && { outOfScope: patch.outOfScope?.trim() || null }),
         updatedAt: new Date(),
       })
       .where(eq(expertiseDomains.id, domainId));

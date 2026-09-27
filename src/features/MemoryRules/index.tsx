@@ -135,9 +135,14 @@ const MemoryRules = () => {
     }
   };
 
+  /** Every list mutation: re-read after it, and on failure say so and show what is saved. */
   const run = async (action: () => Promise<unknown>) => {
-    await action();
-    await refresh();
+    try {
+      await action();
+      await refresh();
+    } catch (error) {
+      await recover(error);
+    }
   };
 
   const handlers = {
@@ -162,9 +167,11 @@ const MemoryRules = () => {
       // Only a rule still in force can absorb another; archived rows are not targets.
       if (all.find((rule) => rule.id === id)?.status !== 'active') return;
       const target = id;
+      const source = mergeFrom;
+      // Leave merge mode whatever the outcome, so a failure does not strand the page in it.
+      setMergeFrom(undefined);
       void run(async () => {
-        await expertiseService.mergeRules(mergeFrom, target);
-        setMergeFrom(undefined);
+        await expertiseService.mergeRules(source, target);
         setSelectedId(target);
       });
       return;

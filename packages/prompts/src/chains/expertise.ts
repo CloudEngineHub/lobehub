@@ -113,7 +113,7 @@ export const chainExpertiseDomainDraft = ({
       ],
 });
 
-export const EXPERTISE_RULE_DRAFT_PROMPT_VERSION = 'v1';
+export const EXPERTISE_RULE_DRAFT_PROMPT_VERSION = 'v2';
 
 /**
  * One rule drafted from whatever the reviewer typed or pasted: a sentence, a paragraph, or a
@@ -125,7 +125,7 @@ export const EXPERTISE_RULE_DRAFT_JSON_SCHEMA = {
   schema: {
     additionalProperties: false,
     properties: {
-      compilability: { enum: ['compiled', 'compilable', 'not-compilable'], type: 'string' },
+      compilability: { enum: ['compilable', 'not-compilable'], type: 'string' },
       enforcement: { enum: ['block', 'remind'], type: 'string' },
       groupId: { type: ['string', 'null'] },
       how: { type: ['string', 'null'] },
@@ -164,7 +164,7 @@ Return:
 - how: what counts as breaking it, as a concrete example a checker could look for, or null;
 - limits: when it does NOT apply, or null when the reviewer set no boundary;
 - enforcement: "block" only when the reviewer clearly wants deliveries held until fixed (words like must, never, reject, block, 必须, 不许, 打回); otherwise "remind";
-- compilability: "compiled" when a program could check it from the delivery alone (a diff, a file, a count), "compilable" when a program can gather the evidence but a judgement is still needed, "not-compilable" when only a person or a model can judge it;
+- compilability: "compilable" when a program could check it or gather the evidence for it from the delivery (a diff, a file, a count), "not-compilable" when only a person or a model can judge it;
 - groupId: the id of the existing group whose gate question this rule passes, or null when none fits;
 - newGroup: when groupId is null, a proposed group — a short title and the gate question a rule must pass to be filed there; otherwise null.
 

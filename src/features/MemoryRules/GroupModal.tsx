@@ -125,6 +125,8 @@ const GroupContent = ({ group, onDone }: GroupContentProps) => {
   const [brief, setBrief] = useState('');
   const [title, setTitle] = useState(group?.domain.title ?? '');
   const [gate, setGate] = useState(group?.domain.domainFilter ?? '');
+  // Ingestion reads this literally when deciding which rejections belong, so it is kept.
+  const [outOfScope, setOutOfScope] = useState(group?.domain.outOfScope ?? '');
   const [busy, setBusy] = useState(false);
   const ready = Boolean(title.trim() && gate.trim());
 
@@ -136,6 +138,7 @@ const GroupContent = ({ group, onDone }: GroupContentProps) => {
       const drafted = await expertiseService.draftRuleGroup(text);
       setTitle(drafted.title);
       setGate(drafted.gate);
+      setOutOfScope(drafted.outOfScope ?? '');
     } catch (error) {
       console.error('[MemoryRules] group draft failed:', error);
       setTitle(text.slice(0, 40));
@@ -151,17 +154,22 @@ const GroupContent = ({ group, onDone }: GroupContentProps) => {
       if (group) {
         await expertiseService.updateRuleGroup(group.domain.id, {
           gate: gate.trim(),
+          outOfScope: outOfScope.trim() || null,
           title: title.trim(),
         });
         onDone();
       } else {
         const id = await expertiseService.createRuleGroup({
           gate: gate.trim(),
+          outOfScope: outOfScope.trim() || undefined,
           title: title.trim(),
         });
         onDone(id ? { gate: gate.trim(), id, title: title.trim() } : undefined);
       }
       close();
+    } catch (error) {
+      console.error('[MemoryRules] group save failed:', error);
+      toast.error(t('rules.saveFailed'));
     } finally {
       setBusy(false);
     }
@@ -232,6 +240,15 @@ const GroupContent = ({ group, onDone }: GroupContentProps) => {
               placeholder={t('rules.group.gatePlaceholder')}
               value={gate}
               onChange={(e) => setGate(e.target.value)}
+            />
+          </Flexbox>
+          <Flexbox gap={6}>
+            <span className={composeStyles.label}>{t('rules.group.outOfScopeLabel')}</span>
+            <TextArea
+              autoSize={{ maxRows: 4, minRows: 1 }}
+              placeholder={t('rules.group.outOfScopePlaceholder')}
+              value={outOfScope}
+              onChange={(e) => setOutOfScope(e.target.value)}
             />
           </Flexbox>
         </Flexbox>

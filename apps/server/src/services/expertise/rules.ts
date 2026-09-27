@@ -21,7 +21,11 @@ const nullableText = z
   .transform((value) => value?.trim() || null);
 
 export const RuleDraftSchema = z.object({
-  compilability: z.enum(['compiled', 'compilable', 'not-compilable']),
+  // A draft can at most be checkable by a program; `compiled` means a criterion is linked, which
+  // only the compiler does. Older prompt versions may still say `compiled`.
+  compilability: z
+    .enum(['compiled', 'compilable', 'not-compilable'])
+    .transform((value) => (value === 'compiled' ? 'compilable' : value)),
   enforcement: z.enum(['block', 'remind']),
   groupId: z.string().nullable(),
   how: nullableText,

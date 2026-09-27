@@ -167,6 +167,8 @@
   "rules.group.nameLabel": "组名",
   "rules.group.newTitle": "新建一组",
   "rules.group.next": "生成",
+  "rules.group.outOfScopeLabel": "不属于这组的（可不填）",
+  "rules.group.outOfScopePlaceholder": "例如：和仓库无关的通用交付审美不放这里",
   "rules.group.renameTitle": "重命名",
   "rules.group.reviewStep": "看看组名和守门题，改到满意再建组",
   "rules.group.scope": "· 生效于 {{scopes}}",

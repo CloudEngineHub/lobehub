@@ -59,7 +59,8 @@ const styles = createStaticStyles(({ css }) => ({
   `,
 }));
 
-type Compilability = 'compiled' | 'compilable' | 'not-compilable';
+/** What the reviewer can claim; `compiled` is only set by the compiler. */
+type Compilability = 'compilable' | 'not-compilable';
 
 interface GroupChoice {
   gate: string;
@@ -185,6 +186,9 @@ const ComposeContent = ({
       });
       if (created) onCreated(created.id);
       close();
+    } catch (error) {
+      console.error('[MemoryRules] rule save failed:', error);
+      toast.error(t('rules.saveFailed'));
     } finally {
       setBusy(false);
     }
@@ -362,7 +366,7 @@ const ComposeContent = ({
                 </span>
               </DropdownMenu>
               <DropdownMenu
-                items={(['compiled', 'compilable', 'not-compilable'] as const).map((value) => ({
+                items={(['compilable', 'not-compilable'] as const).map((value) => ({
                   key: value,
                   label: t(`rules.method.${value}`),
                   onClick: () => setCompilability(value),

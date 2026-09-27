@@ -255,7 +255,8 @@ export const expertiseRouter = router({
    * Drafts one rule from whatever the reviewer typed or pasted. Nothing is written: the draft
    * comes back for review and only `createRule` persists it.
    */
-  draftRule: expertiseProcedure
+  // Drafting spends model capacity on something only a member can save, so it is gated the same.
+  draftRule: expertiseWriteProcedure
     .input(
       z.object({
         brief: z.string().min(1).max(20_000),
@@ -265,7 +266,7 @@ export const expertiseRouter = router({
     .mutation(async ({ ctx, input }) => ctx.expertiseRuleDraftService.draftRule(input)),
 
   /** Drafts a group (name + gate question) from a sentence; `createRuleGroup` persists it. */
-  draftRuleGroup: expertiseProcedure
+  draftRuleGroup: expertiseWriteProcedure
     .input(z.object({ brief: z.string().min(1).max(20_000) }))
     .mutation(async ({ ctx, input }) => ctx.expertiseRuleDraftService.draftRuleGroup(input)),
 
@@ -273,7 +274,8 @@ export const expertiseRouter = router({
   createRule: expertiseWriteProcedure
     .input(
       z.object({
-        compilability: z.enum(['compiled', 'compilable', 'not-compilable']).optional(),
+        // `compiled` is only true once the compiler links a criterion; nobody can claim it by hand.
+        compilability: z.enum(['compilable', 'not-compilable']).optional(),
         domainId: z.string(),
         enforcement: z.enum(EXPERTISE_ENFORCEMENTS).optional(),
         how: z.string().max(8000).optional(),
@@ -288,7 +290,8 @@ export const expertiseRouter = router({
   updateRule: expertiseWriteProcedure
     .input(
       z.object({
-        compilability: z.enum(['compiled', 'compilable', 'not-compilable']).optional(),
+        // `compiled` is only true once the compiler links a criterion; nobody can claim it by hand.
+        compilability: z.enum(['compilable', 'not-compilable']).optional(),
         enforcement: z.enum(EXPERTISE_ENFORCEMENTS).optional(),
         lessonId: z.string(),
         reasonKind: z.enum(['mechanism', 'taste']).optional(),
@@ -334,7 +337,13 @@ export const expertiseRouter = router({
 
   /** A group the reviewer opens by hand; it mounts on them, so every acceptance can add to it. */
   createRuleGroup: expertiseWriteProcedure
-    .input(z.object({ gate: z.string().min(1).max(1000), title: z.string().min(1).max(200) }))
+    .input(
+      z.object({
+        gate: z.string().min(1).max(1000),
+        outOfScope: z.string().max(1000).optional(),
+        title: z.string().min(1).max(200),
+      }),
+    )
     .mutation(async ({ ctx, input }) => ctx.expertiseModel.createRuleGroup(input)),
 
   /** Renames a group or rewrites its gate question. */
@@ -343,6 +352,7 @@ export const expertiseRouter = router({
       z.object({
         domainId: z.string(),
         gate: z.string().min(1).max(1000).optional(),
+        outOfScope: z.string().max(1000).nullable().optional(),
         title: z.string().min(1).max(200).optional(),
       }),
     )

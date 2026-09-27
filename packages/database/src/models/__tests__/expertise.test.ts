@@ -584,6 +584,64 @@ describe('ExpertiseModel', () => {
     expect(await model.findLesson(first)).toMatchObject({ hitCount: 9 });
   });
 
+  it('counts a run both rules were proven in once after a merge', async () => {
+    const { first, second } = await seedRuleGroup();
+    await serverDB.insert(expertiseRuns).values([
+      {
+        actorId: 'agent-1',
+        actorType: 'agent',
+        domainId: 'rules-domain',
+        id: runId,
+        runIndex: 1,
+        subjectId: 'x',
+        subjectType: 'standalone',
+        userId,
+      },
+      {
+        actorId: 'agent-1',
+        actorType: 'agent',
+        domainId: 'rules-domain',
+        id: 'd3f9b0c6-6d0e-4f2e-9b1a-2c4d5e6f7a01',
+        runIndex: 2,
+        subjectId: 'y',
+        subjectType: 'standalone',
+        userId,
+      },
+    ]);
+    // Both rules were hit in the same run, and `first` once more in another one.
+    await serverDB.insert(expertiseHits).values([
+      { domainId: 'rules-domain', lessonId: first, outcome: 'violation', runId },
+      { domainId: 'rules-domain', lessonId: second, outcome: 'violation', runId },
+      {
+        domainId: 'rules-domain',
+        lessonId: first,
+        outcome: 'violation',
+        runId: 'd3f9b0c6-6d0e-4f2e-9b1a-2c4d5e6f7a01',
+      },
+    ]);
+    const model = new ExpertiseModel(serverDB, userId);
+
+    await model.mergeRules(second, first);
+
+    expect((await model.findLesson(first))?.hitRunCount).toBe(2);
+  });
+
+  it('keeps the exclusion a group was opened with', async () => {
+    const model = new ExpertiseModel(serverDB, userId);
+    const id = await model.createRuleGroup({
+      gate: '只对本仓库成立吗？',
+      outOfScope: '和仓库无关的交付审美',
+      title: 'OSS 工程规范',
+    });
+
+    const [group] = await model.listRules();
+    expect(group.domain).toMatchObject({ id, outOfScope: '和仓库无关的交付审美' });
+
+    await model.updateRuleGroup(id, { outOfScope: null });
+    const [cleared] = await model.listRules();
+    expect(cleared.domain.outOfScope).toBeNull();
+  });
+
   it('keeps the evidence of a rule merged twice over', async () => {
     const { first, second } = await seedRuleGroup();
     await seedHitOn(second);
@@ -733,7 +791,8 @@ describe('ExpertiseModel', () => {
       exampleCount: 4,
       generalizedFromIds: [second],
       hitCount: 9,
-      hitRunCount: 14,
+      // Recounted from the hits, not summed: the seeded counters were placeholders.
+      hitRunCount: 1,
     });
     const source = await model.findLesson(second);
     expect(source).toMatchObject({ rejectedReason: `merged-into:${first}`, status: 'retired' });

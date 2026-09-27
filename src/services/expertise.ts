@@ -72,11 +72,13 @@ class ExpertiseService {
   restoreRule = async (lessonId: string) =>
     lambdaClient.expertise.restoreLesson.mutate({ lessonId });
 
-  createRuleGroup = async (input: { gate: string; title: string }) =>
+  createRuleGroup = async (input: { gate: string; outOfScope?: string; title: string }) =>
     lambdaClient.expertise.createRuleGroup.mutate(input);
 
-  updateRuleGroup = async (domainId: string, patch: { gate?: string; title?: string }) =>
-    lambdaClient.expertise.updateRuleGroup.mutate({ domainId, ...patch });
+  updateRuleGroup = async (
+    domainId: string,
+    patch: { gate?: string; outOfScope?: string | null; title?: string },
+  ) => lambdaClient.expertise.updateRuleGroup.mutate({ domainId, ...patch });
 
   getDomain = async (domainId: string) => lambdaClient.expertise.getDomain.query({ domainId });
 

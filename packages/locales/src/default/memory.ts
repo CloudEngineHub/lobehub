@@ -186,6 +186,9 @@ export default {
   'rules.group.nameLabel': 'Group name',
   'rules.group.newTitle': 'New group',
   'rules.group.next': 'Draft it',
+  'rules.group.outOfScopeLabel': 'What does not belong here (optional)',
+  'rules.group.outOfScopePlaceholder':
+    'e.g. general delivery taste that has nothing to do with the repository',
   'rules.group.renameTitle': 'Rename group',
   'rules.group.reviewStep': 'Check the name and the gate question, then create',
   'rules.group.scope': '· applies to {{scopes}}',

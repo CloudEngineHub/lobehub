@@ -357,9 +357,11 @@ const RuleDocument = ({
             icon={ClipboardCheckIcon}
             label={t('rules.meta.method')}
             menu={
-              editable
+              // `compiled` is set by the compiler once a criterion is linked; the reviewer can only
+              // say whether a program could check it.
+              editable && rule.compilability !== 'compiled'
                 ? choose(
-                    ['compiled', 'compilable', 'not-compilable'] as const,
+                    ['compilable', 'not-compilable'] as const,
                     (value) => t(`rules.method.${value}`),
                     (compilability) => void save({ compilability }),
                   )
