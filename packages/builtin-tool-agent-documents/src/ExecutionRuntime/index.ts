@@ -178,6 +178,8 @@ export interface AgentDocumentsRuntimeOptions {
  * (reads resolve either identifier) and fail with an actionable message when
  * neither is present, instead of looking up and reporting `undefined`.
  */
+const UUID_PATTERN = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i;
+
 const resolveTargetId = <T extends { id: string }>(
   args: T,
   apiName: string,
@@ -209,6 +211,17 @@ export class AgentDocumentsExecutionRuntime {
    */
   notifyMutated(params: { documentId?: string } = {}): Promise<void> {
     return Promise.resolve(this.options.onDocumentsMutated?.(params));
+  }
+
+  /**
+   * Mutations without a pre-read (copy, load rule) key off the binding id, so a
+   * backing `docs_` id received through the `documentId` alias is resolved first.
+   */
+  private async resolveBindingId(agentId: string, id: string): Promise<string | undefined> {
+    if (UUID_PATTERN.test(id)) return id;
+
+    const existing = await this.service.readDocument({ agentId, id });
+    return existing?.id;
   }
 
   private resolveAgentId(context?: AgentDocumentOperationContext) {
@@ -681,7 +694,6 @@ export class AgentDocumentsExecutionRuntime {
   ): Promise<BuiltinServerRuntimeOutput> {
     const target = resolveTargetId(rawArgs, 'copyDocument');
     if ('error' in target) return target.error;
-    const args = target.args;
 
     const agentId = this.resolveAgentId(context);
     if (!agentId) {
@@ -690,6 +702,10 @@ export class AgentDocumentsExecutionRuntime {
         success: false,
       };
     }
+
+    const bindingId = await this.resolveBindingId(agentId, target.args.id);
+    if (!bindingId) return { content: `Document not found: ${target.args.id}`, success: false };
+    const args = { ...target.args, id: bindingId };
 
     const copied = await this.service.copyDocument({
       ...args,
@@ -724,7 +740,6 @@ export class AgentDocumentsExecutionRuntime {
   ): Promise<BuiltinServerRuntimeOutput> {
     const target = resolveTargetId(rawArgs, 'updateLoadRule');
     if ('error' in target) return target.error;
-    const args = target.args;
 
     const agentId = this.resolveAgentId(context);
     if (!agentId) {
@@ -733,6 +748,10 @@ export class AgentDocumentsExecutionRuntime {
         success: false,
       };
     }
+
+    const bindingId = await this.resolveBindingId(agentId, target.args.id);
+    if (!bindingId) return { content: `Document not found: ${target.args.id}`, success: false };
+    const args = { ...target.args, id: bindingId };
 
     const updated = await this.service.updateLoadRule({ ...args, agentId });
     if (!updated) return { content: `Document not found: ${args.id}`, success: false };

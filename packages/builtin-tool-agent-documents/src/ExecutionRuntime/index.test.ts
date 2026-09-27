@@ -97,6 +97,51 @@ describe('AgentDocumentsExecutionRuntime', () => {
       expect(result.success).toBe(true);
     });
 
+    it('copies and updates load rules by the binding id when given a backing `docs_` id', async () => {
+      const readDocument = vi.fn().mockResolvedValue({
+        documentId: 'docs_OEyZeRFLrr7Od57X',
+        id: '6740f044-b58b-47eb-bdc0-21ade6c85eb2',
+        title: 'Design Directives',
+      });
+      const copyDocument = vi.fn().mockResolvedValue({
+        documentId: 'docs_copy',
+        id: 'copy-binding',
+        title: 'Design Directives (copy)',
+      });
+      const updateLoadRule = vi.fn().mockResolvedValue({
+        documentId: 'docs_OEyZeRFLrr7Od57X',
+        title: 'Design Directives',
+      });
+      const runtime = createRuntime({ copyDocument, readDocument, updateLoadRule });
+
+      await runtime.copyDocument({ documentId: 'docs_OEyZeRFLrr7Od57X' } as any, {
+        agentId: 'agent-1',
+      });
+      await runtime.updateLoadRule(
+        { documentId: 'docs_OEyZeRFLrr7Od57X', rule: { rule: 'always' } } as any,
+        { agentId: 'agent-1' },
+      );
+
+      expect(copyDocument).toHaveBeenCalledWith(
+        expect.objectContaining({ id: '6740f044-b58b-47eb-bdc0-21ade6c85eb2' }),
+      );
+      expect(updateLoadRule).toHaveBeenCalledWith(
+        expect.objectContaining({ id: '6740f044-b58b-47eb-bdc0-21ade6c85eb2' }),
+      );
+    });
+
+    it('does not pre-read when copy already has a binding id', async () => {
+      const readDocument = vi.fn();
+      const copyDocument = vi.fn().mockResolvedValue({ documentId: 'docs_c', id: 'c', title: 'C' });
+      const runtime = createRuntime({ copyDocument, readDocument });
+
+      await runtime.copyDocument({ id: '6740f044-b58b-47eb-bdc0-21ade6c85eb2' } as any, {
+        agentId: 'agent-1',
+      });
+
+      expect(readDocument).not.toHaveBeenCalled();
+    });
+
     it('explains the missing `id` instead of reporting "Document not found: undefined"', async () => {
       const readDocument = vi.fn();
       const runtime = createRuntime({ readDocument });
