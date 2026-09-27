@@ -559,6 +559,27 @@ describe('AgentSlice Actions', () => {
       expect(resolveAgentDocumentsContext).toHaveBeenCalledTimes(2);
     });
 
+    it('does not let a fetch started before an invalidation overwrite the newer list', async () => {
+      let resolveStale!: (docs: any) => void;
+      vi.mocked(resolveAgentDocumentsContext)
+        .mockImplementationOnce(() => new Promise((resolve) => (resolveStale = resolve)))
+        .mockResolvedValueOnce([] as any);
+
+      const { ensureAgentDocuments, invalidateAgentDocuments } = useAgentStore.getState();
+
+      const stale = ensureAgentDocuments('agent-1');
+      invalidateAgentDocuments('agent-1');
+      await expect(ensureAgentDocuments('agent-1')).resolves.toEqual([]);
+
+      // The pre-invalidation response arrives last and must not be cached.
+      resolveStale([doc('zhu-settings')]);
+      await stale;
+
+      expect(useAgentStore.getState().agentDocumentsMap['agent-1']).toEqual([]);
+      await expect(ensureAgentDocuments('agent-1')).resolves.toEqual([]);
+      expect(resolveAgentDocumentsContext).toHaveBeenCalledTimes(2);
+    });
+
     it('drops the cached list when a document mutation invalidates the agent', async () => {
       const { invalidateDocumentMutation } = await import('@/services/document/invalidation');
       useAgentStore.setState({ agentDocumentsMap: { 'agent-1': [doc('zhu-settings')] } } as any);
