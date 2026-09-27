@@ -301,6 +301,20 @@ describe('normalizeEnvVarRefs', () => {
       ).toBe("Set-Content a.cmd 'it''s %PATH%'; echo ${env:PATH}");
     });
 
+    it('should lex $( ) subexpressions inside double-quoted strings as code', () => {
+      expect(
+        normalizeEnvVarRefs(`Write-Output "$('%PATH%') and $(("%PATH%"))" %PATH%`, env, 'pwsh'),
+      ).toBe(`Write-Output "$('%PATH%') and $(("\${env:PATH}"))" \${env:PATH}`);
+    });
+
+    it('should recognize a comment right after an operator', () => {
+      expect(
+        normalizeEnvVarRefs("$x = 1 +# don't expand %PATH%\n2\nWrite-Output %PATH%", env, 'pwsh'),
+      ).toBe("$x = 1 +# don't expand %PATH%\n2\nWrite-Output ${env:PATH}");
+      // `#` inside a bare word is not a comment.
+      expect(normalizeEnvVarRefs('echo a#b %PATH%', env, 'pwsh')).toBe('echo a#b ${env:PATH}');
+    });
+
     it('should still rewrite %VAR% in bare words and ordinary double-quoted strings', () => {
       expect(normalizeEnvVarRefs('cd "%USERPROFILE%\\Desktop"', env, 'pwsh')).toBe(
         'cd "${env:USERPROFILE}\\Desktop"',

@@ -303,96 +303,122 @@ export const getShellInfo = async (): Promise<ShellInfo> =>
  *
  * Ordinary double-quoted strings are scanned over (so an apostrophe inside
  * `"it's"` does not open a single-quoted string) but not reported: `%VAR%`
- * inside them is still a reference the author expected to expand. This is a
- * lexer-grade approximation, not a parser — an unterminated literal extends to
- * the end of the script, which errs on the side of leaving text untouched.
+ * inside them is still a reference the author expected to expand. Their
+ * `$( ... )` subexpressions are code, so they are lexed like the top level.
+ * This is a lexer-grade approximation, not a parser — an unterminated literal
+ * extends to the end of the script, which errs on the side of leaving text
+ * untouched.
  */
 const findPowerShellLiteralRanges = (script: string): Array<[number, number]> => {
   const ranges: Array<[number, number]> = [];
   const length = script.length;
-  let inDoubleQuoted = false;
-  let i = 0;
 
-  while (i < length) {
-    const char = script[i];
-
-    if (inDoubleQuoted) {
+  /** Scan an expandable `"..."` body from `i`; returns the index after the closing quote. */
+  const scanExpandableString = (from: number): number => {
+    let i = from;
+    while (i < length) {
+      const char = script[i];
       if (char === '`') {
         i += 2;
-      } else if (char === '"' && script[i + 1] === '"') {
+      } else if (char === '$' && script[i + 1] === '(') {
+        i = scanCode(i + 2, true);
+      } else if (char === '"') {
+        if (script[i + 1] !== '"') return i + 1;
         i += 2;
       } else {
-        if (char === '"') inDoubleQuoted = false;
         i += 1;
       }
-      continue;
     }
+    return length;
+  };
 
-    // Backtick escapes the next character (`` `' `` is a literal apostrophe).
-    if (char === '`') {
-      i += 2;
-      continue;
-    }
+  /**
+   * Scan code from `i`. Inside a subexpression, stops after the `)` that
+   * closes it; returns the index where scanning ended.
+   */
+  function scanCode(from: number, inSubexpression: boolean): number {
+    let depth = 0;
+    let i = from;
 
-    // Here-string: `@'` / `@"` must be followed by a line break; it closes at
-    // `'@` / `"@` at the start of a line.
-    if (char === '@' && (script[i + 1] === "'" || script[i + 1] === '"')) {
-      const quote = script[i + 1];
-      const opener = /^[\t ]*\r?\n/.exec(script.slice(i + 2));
-      if (opener) {
-        const close = script.indexOf(`\n${quote}@`, i + 2 + opener[0].length - 1);
-        const end = close === -1 ? length : close + 3;
+    while (i < length) {
+      const char = script[i];
+
+      // Backtick escapes the next character (`` `' `` is a literal apostrophe).
+      if (char === '`') {
+        i += 2;
+        continue;
+      }
+
+      // Here-string: `@'` / `@"` must be followed by a line break; it closes
+      // at `'@` / `"@` at the start of a line.
+      if (char === '@' && (script[i + 1] === "'" || script[i + 1] === '"')) {
+        const quote = script[i + 1];
+        const opener = /^[\t ]*\r?\n/.exec(script.slice(i + 2));
+        if (opener) {
+          const close = script.indexOf(`\n${quote}@`, i + 2 + opener[0].length - 1);
+          const end = close === -1 ? length : close + 3;
+          ranges.push([i, end]);
+          i = end;
+          continue;
+        }
+      }
+
+      if (char === "'") {
+        let j = i + 1;
+        while (j < length) {
+          if (script[j] === "'") {
+            if (script[j + 1] === "'") {
+              j += 2;
+              continue;
+            }
+            break;
+          }
+          j += 1;
+        }
+        const end = Math.min(j + 1, length);
         ranges.push([i, end]);
         i = end;
         continue;
       }
-    }
 
-    if (char === "'") {
-      let j = i + 1;
-      while (j < length) {
-        if (script[j] === "'") {
-          if (script[j + 1] === "'") {
-            j += 2;
-            continue;
-          }
-          break;
-        }
-        j += 1;
+      if (char === '"') {
+        i = scanExpandableString(i + 1);
+        continue;
       }
-      const end = Math.min(j + 1, length);
-      ranges.push([i, end]);
-      i = end;
-      continue;
-    }
 
-    if (char === '"') {
-      inDoubleQuoted = true;
+      // Comments: `<# ... #>` blocks, and `#` to the end of the line unless it
+      // sits inside a bare word (`a#b` is one argument). Skipped so an
+      // apostrophe in a comment does not swallow the code after it.
+      if (char === '<' && script[i + 1] === '#') {
+        const close = script.indexOf('#>', i + 2);
+        const end = close === -1 ? length : close + 2;
+        ranges.push([i, end]);
+        i = end;
+        continue;
+      }
+      if (char === '#' && (i === 0 || !/[\w$%.:\\/-]/.test(script[i - 1]))) {
+        const newline = script.indexOf('\n', i);
+        const end = newline === -1 ? length : newline;
+        ranges.push([i, end]);
+        i = end;
+        continue;
+      }
+
+      if (inSubexpression) {
+        if (char === '(') depth += 1;
+        if (char === ')') {
+          if (depth === 0) return i + 1;
+          depth -= 1;
+        }
+      }
+
       i += 1;
-      continue;
     }
 
-    // Comments: `<# ... #>` blocks, and `#` at the start of a token to the end
-    // of the line. Skipped so an apostrophe in a comment does not swallow the
-    // code after it.
-    if (char === '<' && script[i + 1] === '#') {
-      const close = script.indexOf('#>', i + 2);
-      const end = close === -1 ? length : close + 2;
-      ranges.push([i, end]);
-      i = end;
-      continue;
-    }
-    if (char === '#' && (i === 0 || /[\s;|&(){}]/.test(script[i - 1]))) {
-      const newline = script.indexOf('\n', i);
-      const end = newline === -1 ? length : newline;
-      ranges.push([i, end]);
-      i = end;
-      continue;
-    }
-
-    i += 1;
+    return length;
   }
 
+  scanCode(0, false);
   return ranges;
 };
 
