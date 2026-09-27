@@ -60,6 +60,22 @@ vi.mock('@/database/models/message', () => ({
   }),
 }));
 
+const { mockSettleTopicRunningOperation } = vi.hoisted(() => ({
+  mockSettleTopicRunningOperation: vi.fn(),
+}));
+
+vi.mock('@/database/models/topic', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/database/models/topic')>();
+  return {
+    ...actual,
+    TopicModel: vi.fn(function (this: any, ...args: any[]) {
+      const instance = new (actual.TopicModel as any)(...args);
+      instance.settleRunningOperation = mockSettleTopicRunningOperation;
+      return instance;
+    }),
+  };
+});
+
 vi.mock('@/database/models/agent', () => ({
   AgentModel: vi.fn().mockImplementation(function () {
     return {
@@ -2490,6 +2506,74 @@ describe('AgentRuntimeService', () => {
         expect(mockCoordinator.markInterrupted).not.toHaveBeenCalled();
       },
     );
+
+    // G-04: stopping a supervisor parked on its members must stop the members
+    // too, and settle the supervisor itself (no step loop is left to do it).
+    describe('cascade to group members', () => {
+      let findChildren: MockInstance<AgentOperationModel['findInFlightChildOperationIds']>;
+      let dispatchHooks: MockInstance;
+
+      beforeEach(() => {
+        findChildren = vi
+          .spyOn(AgentOperationModel.prototype, 'findInFlightChildOperationIds')
+          .mockImplementation(async (id) => (id === 'op-sup' ? ['op-carol', 'op-dave'] : []));
+        dispatchHooks = vi
+          .spyOn((service as any).completionLifecycle, 'dispatchHooks')
+          .mockResolvedValue(undefined);
+        mockSettleTopicRunningOperation.mockResolvedValue({ status: 'settled' });
+      });
+
+      afterEach(() => {
+        findChildren.mockRestore();
+        dispatchHooks.mockRestore();
+      });
+
+      it('interrupts every in-flight member of a parked supervisor and settles it', async () => {
+        const states: Record<string, any> = {
+          'op-carol': { metadata: { topicId: 'tpc-1' }, status: 'running' },
+          'op-dave': { metadata: { threadId: 'thd-1', topicId: 'tpc-1' }, status: 'running' },
+          'op-sup': { metadata: { topicId: 'tpc-1' }, status: 'waiting_for_async_tool' },
+        };
+        mockCoordinator.loadAgentState.mockImplementation(async (id: string) => states[id]);
+
+        expect(await service.interruptOperation('op-sup')).toBe(true);
+
+        expect(mockCoordinator.markInterrupted).toHaveBeenCalledWith('op-sup');
+        expect(mockCoordinator.markInterrupted).toHaveBeenCalledWith('op-carol');
+        expect(mockCoordinator.markInterrupted).toHaveBeenCalledWith('op-dave');
+        for (const id of ['op-sup', 'op-carol', 'op-dave']) {
+          expect(mockCoordinator.saveAgentState).toHaveBeenCalledWith(
+            id,
+            expect.objectContaining({ status: 'interrupted' }),
+          );
+        }
+
+        // The parked supervisor is persisted as interrupted (not left on
+        // waiting_for_async_tool) and its topic marker dropped...
+        expect(dispatchHooks).toHaveBeenCalledWith(
+          'op-sup',
+          expect.objectContaining({ status: 'interrupted' }),
+          'interrupted',
+        );
+        expect(mockSettleTopicRunningOperation).toHaveBeenCalledWith('tpc-1', 'op-sup', 'active');
+        // ...before the members stop, so their completion bridges lose the
+        // resume CAS instead of waking the stopped supervisor.
+        expect(dispatchHooks.mock.invocationCallOrder[0]).toBeLessThan(
+          mockCoordinator.markInterrupted.mock.invocationCallOrder[1],
+        );
+        // Running members settle through their own step loop.
+        expect(dispatchHooks).toHaveBeenCalledTimes(1);
+      });
+
+      it('still stops the parent when listing the children fails', async () => {
+        findChildren.mockRejectedValue(new Error('db down'));
+        mockCoordinator.loadAgentState.mockResolvedValue({ status: 'running' });
+
+        expect(await service.interruptOperation('op-sup')).toBe(true);
+        expect(mockCoordinator.markInterrupted).toHaveBeenCalledWith('op-sup');
+        expect(dispatchHooks).not.toHaveBeenCalled();
+      });
+    });
 
     it.each(['idle', 'running', 'waiting_for_human', 'waiting_for_async_tool'] as const)(
       'does not treat missing runtime state as stopped when the owned operation is %s',

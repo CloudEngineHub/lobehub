@@ -712,6 +712,24 @@ describe('AgentOperationModel', () => {
     });
   });
 
+  describe('findInFlightChildOperationIds', () => {
+    it('returns only unsettled children of the parent, owner-scoped', async () => {
+      const model = new AgentOperationModel(serverDB, userId);
+
+      await serverDB.insert(agentOperations).values([
+        { id: 'sup', status: 'waiting_for_async_tool', userId },
+        { id: 'member-running', parentOperationId: 'sup', status: 'running', userId },
+        { id: 'member-parked', parentOperationId: 'sup', status: 'waiting_for_human', userId },
+        { id: 'member-done', parentOperationId: 'sup', status: 'done', userId },
+        { id: 'member-other', parentOperationId: 'other-sup', status: 'running', userId },
+        { id: 'member-foreign', parentOperationId: 'sup', status: 'running', userId: otherUserId },
+      ]);
+
+      const ids = await model.findInFlightChildOperationIds('sup');
+      expect(ids.sort()).toEqual(['member-parked', 'member-running']);
+    });
+  });
+
   describe('listOperationTree', () => {
     it('returns the root op together with its direct children, owner-scoped', async () => {
       const model = new AgentOperationModel(serverDB, userId);
