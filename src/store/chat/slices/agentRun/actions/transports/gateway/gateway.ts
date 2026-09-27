@@ -48,6 +48,7 @@ import { getAgentStoreState } from '@/store/agent';
 import { agentByIdSelectors, chatConfigByIdSelectors } from '@/store/agent/selectors';
 import { consumePendingTopicRepos, getPendingTopicRepos } from '@/store/chat/pendingTopicRepos';
 import { topicSelectors } from '@/store/chat/selectors';
+import { INPUT_LOADING_OPERATION_TYPES } from '@/store/chat/slices/operation/types';
 import type { ChatStore } from '@/store/chat/store';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
 import { topicMapKey } from '@/store/chat/utils/topicMapKey';
@@ -1890,6 +1891,38 @@ export class GatewayActionImpl {
     this.clearLocalRunningOperation({ ...params, status: 'active' });
   };
 
+  /**
+   * Whether this tab has a live turn on `topicId` that belongs to a run other
+   * than `serverOperationId` — e.g. a follow-up (or queued message) already sent
+   * after this run ended. Operations of this run itself (its runtime op and its
+   * descendants such as broadcast members) are excluded.
+   */
+  #hasOtherLiveRunOnTopic = (topicId: string, serverOperationId: string): boolean => {
+    const { operations, operationsByType } = this.#get();
+
+    const belongsToRun = (op: (typeof operations)[string] | undefined): boolean => {
+      let current = op;
+      while (current) {
+        if (current.metadata.serverOperationId === serverOperationId) return true;
+        current = current.parentOperationId ? operations[current.parentOperationId] : undefined;
+      }
+      return false;
+    };
+
+    return INPUT_LOADING_OPERATION_TYPES.some((type) =>
+      (operationsByType?.[type] ?? []).some((id) => {
+        const op = operations?.[id];
+        return (
+          !!op &&
+          op.status === 'running' &&
+          !op.metadata.isAborting &&
+          op.context.topicId === topicId &&
+          !belongsToRun(op)
+        );
+      }),
+    );
+  };
+
   private clearLocalRunningOperation = (params: {
     agentId?: string;
     groupId?: string;
@@ -1909,19 +1942,30 @@ export class GatewayActionImpl {
       groupId: groupId ?? state.activeGroupId,
     });
     const existingTopic = state.topicDataMap[key]?.items?.find((t) => t.id === topicId);
-    // Same ownership guard the removed client-side `superseded` check used to
-    // provide: if a newer run already overwrote this topic's local marker with
-    // its own operationId, this stale session's completion must not clobber it
-    // (neither the metadata clear nor, now, the status write).
-    if (existingTopic?.metadata?.runningOperation?.operationId !== operationId) return;
+    if (!existingTopic) return;
 
-    state.internal_dispatchTopic({
-      agentId,
-      groupId,
-      id: topicId,
-      type: 'updateTopic',
-      value: { metadata: { ...existingTopic.metadata, runningOperation: null } },
-    });
+    // Ownership guard: a stale session's completion must not clobber a newer
+    // run's row (neither the metadata clear nor the status write).
+    //
+    // The local `runningOperation` marker alone cannot prove ownership: run start
+    // only rewrites it when an older marker is present (see executeGatewayAgent),
+    // so a follow-up on an existing topic runs with a `null` local marker while
+    // its optimistic `running` status is still in place. Requiring the marker to
+    // match skipped the status write for every such run and left the sidebar
+    // spinner on until a later topic-list refetch (LOBE-14423).
+    const markerOperationId = existingTopic.metadata?.runningOperation?.operationId;
+    if (markerOperationId && markerOperationId !== operationId) return;
+    if (!markerOperationId && this.#hasOtherLiveRunOnTopic(topicId, operationId)) return;
+
+    if (markerOperationId) {
+      state.internal_dispatchTopic({
+        agentId,
+        groupId,
+        id: topicId,
+        type: 'updateTopic',
+        value: { metadata: { ...existingTopic.metadata, runningOperation: null } },
+      });
+    }
 
     // Routed through `internal_pinTopicStatus`, not a bare dispatch: it also
     // registers the pending-write pin so a topic-list refetch racing in
