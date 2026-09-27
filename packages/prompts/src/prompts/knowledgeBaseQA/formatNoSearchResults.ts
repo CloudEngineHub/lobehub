@@ -21,11 +21,11 @@ export const promptNoSearchResults = (query: string): string => {
  */
 export const promptNoKnowledgeBaseInScope = (query: string): string => {
   return `<knowledge_base_search_results query="${query}" totalCount="0" searchedKnowledgeBases="0">
-<instruction>No knowledge base is attached to this agent, so searchKnowledgeBase had nothing to search. This does NOT mean the content does not exist — knowledge bases and documents you created are not searchable until the knowledge base is attached to this agent.</instruction>
+<instruction>No knowledge base is attached to this agent (or enabled on its task's project), so searchKnowledgeBase had nothing to search. This does NOT mean the content does not exist — knowledge bases and documents you created are not searchable until the knowledge base is attached to this agent.</instruction>
 <suggestions>
-<suggestion>If you already know the document or file IDs (e.g. from createDocument), call readKnowledge with those IDs directly</suggestion>
-<suggestion>Call listKnowledgeBases and viewKnowledgeBase to browse a knowledge base's items, then readKnowledge the ones you need</suggestion>
-<suggestion>Ask the user to attach the knowledge base to this agent to make it searchable</suggestion>
+<suggestion>If readKnowledge is among your available tools and you already know the document or file IDs (e.g. from createDocument), read them directly</suggestion>
+<suggestion>If listKnowledgeBases / viewKnowledgeBase are among your available tools, browse a knowledge base's items there, then read the ones you need</suggestion>
+<suggestion>Otherwise, tell the user nothing was searched and ask them to attach the knowledge base to this agent</suggestion>
 </suggestions>
 </knowledge_base_search_results>`;
 };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { promptNoSearchResults } from './formatNoSearchResults';
+import { promptNoKnowledgeBaseInScope, promptNoSearchResults } from './formatNoSearchResults';
 
 describe('promptNoSearchResults', () => {
   it('should format no search results with simple query', () => {
@@ -21,5 +21,20 @@ describe('promptNoSearchResults', () => {
   it('should format no search results with non-English query', () => {
     const result = promptNoSearchResults('如何配置数据库连接');
     expect(result).toMatchSnapshot();
+  });
+});
+
+describe('promptNoKnowledgeBaseInScope', () => {
+  it('only suggests tools conditionally and always offers a user-facing fallback', () => {
+    // Graph-agent nodes can expose searchKnowledgeBase without the other KB APIs.
+    const prompt = promptNoKnowledgeBaseInScope('Project Falcon ships');
+
+    expect(prompt).toContain('searchedKnowledgeBases="0"');
+    expect(prompt).toContain('If readKnowledge is among your available tools');
+    expect(prompt).toContain(
+      'If listKnowledgeBases / viewKnowledgeBase are among your available tools',
+    );
+    expect(prompt).toContain('Otherwise, tell the user nothing was searched');
+    expect(prompt).not.toMatch(/<suggestion>Call /);
   });
 });
