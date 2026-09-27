@@ -23,6 +23,7 @@ import { useGroupProfileStore } from '@/store/groupProfile';
 import AutoSaveHint from '../Header/AutoSaveHint';
 import AgentHeader from './AgentHeader';
 import AgentTool from './AgentTool';
+import GatewayModeHint from './GatewayModeHint';
 
 const MemberProfile = memo(() => {
   const { t } = useTranslation(['setting', 'chat']);
@@ -136,6 +137,12 @@ const MemberProfile = memo(() => {
       >
         {/* Header: Avatar + Name */}
         <AgentHeader disabled={!canEdit} readOnly={isSupervisor} />
+        {!isSupervisor && (
+          <GatewayModeHint
+            agentId={agentId}
+            supervisorAgentId={currentGroup?.supervisorAgentId ?? undefined}
+          />
+        )}
         {/* Config Bar: Model Selector */}
         <Flexbox
           horizontal

@@ -798,6 +798,7 @@
   "group.profile.external": "外部",
   "group.profile.externalAgentWarning": "这是一个外部代理。此处所做的更改将直接修改原始代理配置。",
   "group.profile.groupSettings": "群组设定",
+  "group.profile.memberGatewayModeIgnored": "该成员在自己的对话设置中关闭了 Agent Gateway。群聊中成员跟随群组主管的运行方式执行，该设置仅对单独对话生效。",
   "group.profile.supervisor": "群组主管",
   "group.profile.supervisorPlaceholder": "群组主管负责协调不同 Agent，在此设定主管的信息可以使得协调工作流更加精准",
   "group.removeMember": "移除成员",
