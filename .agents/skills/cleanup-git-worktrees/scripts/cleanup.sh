@@ -377,7 +377,7 @@ clean() {
   ((${#branches[@]} > 0)) || die 'clean requires at least one --branch'
   assert_no_operations
 
-  local branch worktree dirty noise age unpushed pr_number pr_state tip_eq classification counts pr tip base_tip
+  local branch worktree dirty noise age unpushed pr_number pr_state tip_eq classification counts pr tip base_tip config_error config_status
   for branch in "${branches[@]}"; do
     git show-ref --verify --quiet "refs/heads/$branch" || die "local branch not found: $branch"
     tip=$(git rev-parse "refs/heads/$branch")
@@ -423,7 +423,17 @@ clean() {
     assert_no_operations
     # Compare-and-delete refuses a branch advanced after the inspected snapshot.
     git update-ref -d "refs/heads/$branch" "$tip" || die "$branch: branch removal failed; inspect partial cleanup"
-    git config --remove-section "branch.$branch" >/dev/null 2>&1 || true
+    if config_error=$(LC_ALL=C git config --remove-section "branch.$branch" 2>&1); then
+      :
+    else
+      config_status=$?
+      # Exit 128 alone also covers other fatal errors; match the absent-section
+      # diagnostic exactly in a fixed locale. Unknown errors fail closed.
+      if [[ "$config_status" != 128 || "$config_error" != "fatal: no such section: branch.$branch" ]]; then
+        printf '%s\n' "$config_error" >&2
+        die "$branch: configuration cleanup failed; branch ref already deleted (was $tip); partial cleanup"
+      fi
+    fi
     printf 'REMOVED-BRANCH\t%s\t%s\t(was %s)\n' "$branch" "$classification" "$tip"
   done
 }

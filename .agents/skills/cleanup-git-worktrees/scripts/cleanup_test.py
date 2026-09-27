@@ -223,6 +223,39 @@ sed 's/^pick /edit /' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
         self.assertIn("protected-branch", result.stdout)
         self.assertIn("candidate-merged", result.stdout)
 
+    def test_locked_config_reports_partial_cleanup(self):
+        self.git("config", "branch.topic.remote", "origin")
+        (self.repo / ".git/config.lock").write_text("")
+        result = self.clean("--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("configuration cleanup failed", result.stderr)
+        self.assertIn("partial cleanup", result.stderr)
+        self.assertNotIn("REMOVED-BRANCH", result.stdout)
+        self.assertIn("REMOVED-WORKTREE", result.stdout)
+        self.assertNotIn("refs/heads/topic", self.git("show-ref"))
+        self.assertEqual(self.git("config", "branch.topic.remote").strip(), "origin")
+
+    def test_other_config_exit_128_is_not_ignored(self):
+        self.write_executable("git", """#!/usr/bin/env bash
+if [[ $1 == config && $2 == --remove-section ]]; then
+  echo 'fatal: cannot read configuration' >&2
+  exit 128
+fi
+exec "$REAL_GIT" "$@"
+""")
+        result = self.clean("--apply")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read configuration", result.stderr)
+        self.assertIn("partial cleanup", result.stderr)
+        self.assertNotIn("REMOVED-BRANCH", result.stdout)
+
+    def test_existing_branch_config_is_removed(self):
+        self.git("config", "branch.topic.remote", "origin")
+        result = self.clean("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("REMOVED-BRANCH", result.stdout)
+        self.assertNotIn("branch.topic.", self.git("config", "--local", "--list"))
+
     def test_failed_branch_delete_does_not_report_success(self):
         self.write_executable("git", """#!/usr/bin/env bash
 if [[ $1 == update-ref && $2 == -d ]]; then exit 1; fi
