@@ -327,6 +327,15 @@ Some paragraph that must not become the description.`;
       }
     });
 
+    it('should decode HTML entities in the derived name and description', () => {
+      const result = parser.parseSkillMd(
+        '# Research & Analysis\n\nFast & reliable <b>not</b> "quoted" &#169; &#x263A; &amp;.\n',
+      );
+
+      expect(result.manifest.name).toBe('Research & Analysis');
+      expect(result.manifest.description).toBe('Fast & reliable not "quoted" © ☺ &.');
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),
