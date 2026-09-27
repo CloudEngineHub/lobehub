@@ -45,6 +45,7 @@ import {
 import { RequestTrigger } from '@lobechat/types';
 import { isRecord } from '@lobechat/utils/object';
 import debug from 'debug';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import urlJoin from 'url-join';
 
 import {
@@ -55,6 +56,7 @@ import { AgentOperationModel } from '@/database/models/agentOperation';
 import { MessageModel } from '@/database/models/message';
 import { TopicModel } from '@/database/models/topic';
 import { UserModel } from '@/database/models/user';
+import { messagePlugins, messages } from '@/database/schemas';
 import { type LobeChatDatabase } from '@/database/type';
 import { appEnv } from '@/envs/app';
 import { type AgentRuntimeCoordinatorOptions } from '@/server/modules/AgentRuntime';
@@ -123,6 +125,17 @@ if (process.env.VERCEL) {
 }
 
 const log = debug('lobe-server:agent-runtime-service');
+
+/** The conversation a parked op's pending tool messages live in. */
+interface PendingToolScope {
+  threadId?: string | null;
+  topicId?: string | null;
+}
+
+const resolvePendingToolScope = (state: AgentState): PendingToolScope => ({
+  threadId: state.origin?.threadId ?? state.metadata?.threadId,
+  topicId: state.origin?.topicId ?? state.metadata?.topicId,
+});
 
 /**
  * Base delay before the first `verifyAsyncToolBarrier` re-check fires after a
@@ -3263,9 +3276,11 @@ export class AgentRuntimeService {
     }
 
     // Barrier: every pending tool must have a fulfilled tool_result message.
+    const toolScope = resolvePendingToolScope(state);
     const allFulfilled = await this.allPendingToolsFulfilled(
       pending,
       options?.knownFulfilledMessageId,
+      toolScope,
     );
     if (!allFulfilled) {
       log('[%s] async-tool barrier not yet satisfied, holding', parentOperationId);
@@ -3281,7 +3296,7 @@ export class AgentRuntimeService {
     // verify watchdog resolves it correctly: the option (if any) wins, else the
     // hint persisted on the parked tool message's pluginState, else resume.
     const onComplete: GroupActionOnComplete =
-      options?.onComplete ?? (await this.resolveAsyncToolOnComplete(pending));
+      options?.onComplete ?? (await this.resolveAsyncToolOnComplete(pending, toolScope));
 
     // Single-fire guard: only one concurrent completion flips the op.
     const won = await new AgentOperationModel(this.serverDB, this.userId).tryResumeFromAsyncTool(
@@ -3600,23 +3615,51 @@ export class AgentRuntimeService {
    * plugin row itself predates the park, so the `tool_call_id → plugin.id`
    * lookup still resolves; only the freshly written content/state is trusted.
    */
+  /**
+   * The tool message a parked op waits on, by `tool_call_id`.
+   *
+   * `tool_call_id` is only unique per provider response: providers that mint
+   * deterministic ids (`call_0`, Kimi's `functions.x:0`) reuse them across
+   * turns and topics, and LobeHub passes them through. A global lookup matched
+   * an old completed row elsewhere, so the barrier passed at park time and the
+   * supervisor resumed before its members answered. Scope the lookup to the
+   * op's own conversation (topic + thread) and take the newest row — the
+   * placeholder this turn created, not an earlier turn's reuse of the id.
+   */
+  private async findPendingToolMessage(toolCallId: string, scope: PendingToolScope) {
+    const conditions = [eq(messagePlugins.toolCallId, toolCallId)];
+    if (scope.topicId) {
+      conditions.push(
+        eq(messages.topicId, scope.topicId),
+        scope.threadId ? eq(messages.threadId, scope.threadId) : isNull(messages.threadId),
+      );
+    }
+
+    const [row] = await this.serverDB
+      .select({ content: messages.content, id: messagePlugins.id, state: messagePlugins.state })
+      .from(messagePlugins)
+      .innerJoin(messages, eq(messages.id, messagePlugins.id))
+      .where(and(...conditions))
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    return row;
+  }
+
   private async allPendingToolsFulfilled(
     pending: ChatToolPayload[],
-    knownFulfilledMessageId?: string,
+    knownFulfilledMessageId: string | undefined,
+    scope: PendingToolScope,
   ): Promise<boolean> {
     for (const tc of pending) {
-      const plugin = await this.serverDB.query.messagePlugins.findFirst({
-        where: (mp, { eq }) => eq(mp.toolCallId, tc.id),
-      });
+      const plugin = await this.findPendingToolMessage(tc.id, scope);
       if (!plugin) return false;
 
       // Trust the caller's own just-committed backfill (read-your-writes).
       if (knownFulfilledMessageId && plugin.id === knownFulfilledMessageId) continue;
 
-      const message = await this.messageModel.findById(plugin.id);
       const pluginState = plugin.state as { status?: string } | null;
       const fulfilled =
-        (!!message?.content && message.content.length > 0) ||
+        (!!plugin.content && plugin.content.length > 0) ||
         pluginState?.status === 'completed' ||
         pluginState?.status === 'error';
       if (!fulfilled) return false;
@@ -3633,15 +3676,14 @@ export class AgentRuntimeService {
    */
   private async resolveAsyncToolOnComplete(
     pending: ChatToolPayload[],
+    scope: PendingToolScope,
   ): Promise<GroupActionOnComplete> {
     // A batched turn can park multiple deferred/client tools. If ANY of them is
     // a group action requesting finish (skipCallSupervisor / delegate), the
     // orchestration must finish — reading only pending[0] would miss a group
     // finish call that isn't the first pending tool and wrongly resume.
     for (const tool of pending) {
-      const plugin = await this.serverDB.query.messagePlugins.findFirst({
-        where: (mp, { eq }) => eq(mp.toolCallId, tool.id),
-      });
+      const plugin = await this.findPendingToolMessage(tool.id, scope);
       const pluginState = plugin?.state as { onComplete?: string } | null;
       if (pluginState?.onComplete === 'finish') return 'finish';
     }
