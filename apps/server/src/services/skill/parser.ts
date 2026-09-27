@@ -159,14 +159,21 @@ export class SkillParser {
   ): Record<string, unknown> {
     // Drop complete HTML comments (single- or multi-line) first, so comment
     // bodies can never be taken as the title or description.
-    const lines = content.replaceAll(/<!--[\s\S]*?-->/g, '').split(/\r?\n/);
+    // bodies can never be taken as the title or description. An unterminated
+    // `<!--` hides everything after it, as it does when rendered.
+    const lines = content
+      .replaceAll(/<!--[\s\S]*?-->/g, '')
+      .replace(/<!--[\s\S]*$/, '')
+      .split(/\r?\n/);
     let name: string | undefined;
     let description: string | undefined;
     // Text before the H1 (a language selector, badges line, …) is only a
     // fallback: keep scanning so the H1 and the block after it still win.
     let preamble: string | undefined;
     let block: string[] = [];
-    let inFence = false;
+    // The open fence's marker (e.g. "````"); only a compatible fence — same
+    // character, at least as long — closes it, so nested snippets stay inside.
+    let openFence: string | undefined;
 
     const flushBlock = () => {
       if (block.length > 0) {
@@ -179,12 +186,20 @@ export class SkillParser {
     for (const rawLine of lines) {
       const line = rawLine.trim();
 
-      if (/^(?:```|~~~)/.test(line)) {
-        flushBlock();
-        inFence = !inFence;
+      const fence = /^(`{3,}|~{3,})/.exec(line)?.[1];
+      if (openFence) {
+        const closes =
+          fence?.[0] === openFence[0] &&
+          fence.length >= openFence.length &&
+          line.slice(fence.length).trim() === '';
+        if (closes) openFence = undefined;
         continue;
       }
-      if (inFence) continue;
+      if (fence) {
+        flushBlock();
+        openFence = fence;
+        continue;
+      }
 
       if (!line) {
         flushBlock();

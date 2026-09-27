@@ -261,6 +261,20 @@ Some paragraph that must not become the description.`;
       expect(result.manifest.description).toBe('Watches A-share prices and alerts on moves.');
     });
 
+    it('should keep a nested fence inside its longer outer fence', () => {
+      const result = parser.parseSkillMd(
+        '# Title\n\n````md\n```js\ninternal code\n```\n````\n\nReal summary.\n',
+      );
+
+      expect(result.manifest.description).toBe('Real summary.');
+    });
+
+    it('should treat an unterminated HTML comment as hiding the rest of the file', () => {
+      expect(() =>
+        parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n', { fallbackName: 'x' }),
+      ).toThrow(SkillManifestError);
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),
