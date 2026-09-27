@@ -1103,7 +1103,6 @@ describe('GatewayActionImpl', () => {
 
         expect(topicService.settleRunningOperation).not.toHaveBeenCalled();
       });
-
     });
 
     it('should not include parentMessageId when not provided (normal send)', async () => {
