@@ -109,6 +109,22 @@ const lhWrapperWatcher = (dir: string) =>
   `case "$(cat /proc/"$p"/stat 2>/dev/null)" in *") Z "*) break ;; esac; ` +
   `sleep 1; n=$((n + 1)); done; done < ${dir}/.jobs; rm -rf ${dir}) >/dev/null 2>&1 </dev/null &`;
 
+/**
+ * Writes every pid of every job the shell still tracks to `<dir>/.jobs`, one
+ * per line. `jobs -p` lists only one pid per job, so a background pipeline
+ * whose first member exits early (`printf x | { sleep 1; lh …; } &`) would lose
+ * the wrapper under a later member. `jobs -l` lists each pipeline member on its
+ * own line in both bash (`[1]+ 123 Running …` / `     124 Running …`) and dash
+ * (`[1] + 123 …` / `      124`); the job marker is stripped and the leading pid
+ * kept. `jobs` goes through a file rather than a pipe because dash forgets its
+ * jobs in a pipeline subshell. Runs inside a single-quoted `trap`, so it must
+ * not contain single quotes.
+ */
+const recordJobPids = (dir: string) =>
+  `jobs -l > ${dir}/.jobs; ` +
+  String.raw`sed -n "s/^[[][0-9]*[]][ +-]*//; s/^ *\([0-9][0-9]*\).*/\1/p" ` +
+  `${dir}/.jobs > ${dir}/.pids; mv ${dir}/.pids ${dir}/.jobs`;
+
 /** POSIX single-quoting, safe for any value including quotes and newlines. */
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", String.raw`'\''`)}'`;
 
@@ -240,7 +256,7 @@ export const preprocessLhCommand = async (
       // it; a command that replaces this trap only loses the hand-off, never the
       // cleanup.
       '(',
-      `trap 'jobs -p > ${dir}/.jobs; if [ -s ${dir}/.jobs ]; then ${lhWrapperWatcher(dir)} fi' EXIT`,
+      `trap '${recordJobPids(dir)}; if [ -s ${dir}/.jobs ]; then ${lhWrapperWatcher(dir)} fi' EXIT`,
       // Functions resolve before PATH, so an inline `PATH=… lh` still reaches
       // the wrapper; everything run as a program finds it on PATH instead.
       `lh() { ${dir}/lh "$@"; }`,

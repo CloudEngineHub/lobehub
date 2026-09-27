@@ -38,7 +38,7 @@ const wrap = (command: string, extraEnv = '') =>
     `${CREDS}${extraEnv} exec npx -y @lobehub/cli "$@"`,
     '__LOBEHUB_LH_SHIM__',
     '(',
-    `trap 'jobs -p > "$__lobehub_lh_bin"/.jobs; if [ -s "$__lobehub_lh_bin"/.jobs ]; then (n=0; while read -r p; do while [ "$n" -lt 300 ] && kill -0 "$p" 2>/dev/null; do case "$(cat /proc/"$p"/stat 2>/dev/null)" in *") Z "*) break ;; esac; sleep 1; n=$((n + 1)); done; done < "$__lobehub_lh_bin"/.jobs; rm -rf "$__lobehub_lh_bin") >/dev/null 2>&1 </dev/null & fi' EXIT`,
+    `trap 'jobs -l > "$__lobehub_lh_bin"/.jobs; sed -n "s/^[[][0-9]*[]][ +-]*//; s/^ *\\([0-9][0-9]*\\).*/\\1/p" "$__lobehub_lh_bin"/.jobs > "$__lobehub_lh_bin"/.pids; mv "$__lobehub_lh_bin"/.pids "$__lobehub_lh_bin"/.jobs; if [ -s "$__lobehub_lh_bin"/.jobs ]; then (n=0; while read -r p; do while [ "$n" -lt 300 ] && kill -0 "$p" 2>/dev/null; do case "$(cat /proc/"$p"/stat 2>/dev/null)" in *") Z "*) break ;; esac; sleep 1; n=$((n + 1)); done; done < "$__lobehub_lh_bin"/.jobs; rm -rf "$__lobehub_lh_bin") >/dev/null 2>&1 </dev/null & fi' EXIT`,
     'lh() { "$__lobehub_lh_bin"/lh "$@"; }',
     command,
     ')',
@@ -178,9 +178,9 @@ describe('preprocessLhCommand in a real shell', () => {
     rmSync(fakeBin, { force: true, recursive: true });
   });
 
-  const run = async (command: string) => {
+  const run = async (command: string, shell = '/bin/sh') => {
     const { command: prepared } = await preprocessLhCommand(command, 'user-1');
-    return execFileSync('/bin/sh', ['-c', prepared], {
+    return execFileSync(shell, ['-c', prepared], {
       encoding: 'utf8',
       // An inherited token would mask a shim that failed to reach the CLI.
       env: { ...process.env, LOBEHUB_JWT: undefined, PATH: `${fakeBin}:${process.env.PATH}` },
@@ -241,6 +241,19 @@ describe('preprocessLhCommand in a real shell', () => {
 
     expect(readFileSync(out, 'utf8')).toBe('cli jwt=mock-jwt-token\n');
   });
+
+  // Regression: `jobs -p` lists one pid per job, so a background pipeline whose
+  // first member exits early lost the wrapper under a later member's `lh`.
+  // bash and dash format `jobs -l` differently; cover whichever are installed.
+  it.each(['/bin/sh', '/bin/bash', '/bin/dash'].filter((shell) => existsSync(shell)))(
+    'keeps the wrapper for every member of a background pipeline in %s',
+    async (shell) => {
+      const out = path.join(fakeBin, `pipeline-${path.basename(shell)}.out`);
+      await run(`printf x | { sleep 1; lh whoami > '${out}'; } &`, shell);
+
+      expect(readFileSync(out, 'utf8')).toBe('cli jwt=mock-jwt-token\n');
+    },
+  );
 
   // Regression: the job hand-off ran after the command, so an `exit` or a
   // `set -e` failure skipped it and the wrapper was removed under the job.
