@@ -711,7 +711,9 @@ export class AgentRuntimeService {
     state: AgentState,
   ): Promise<void> {
     try {
-      const topicId = state.metadata?.topicId;
+      // Runtime state keeps the conversation topic in `origin`; `metadata` is
+      // the legacy location (same fallback as `resolvePendingToolScope`).
+      const topicId = state.origin?.topicId ?? state.metadata?.topicId;
       if (typeof topicId === 'string') {
         const pendingIds = (await this.messageModel.listMessagePluginsByTopic(topicId))
           .filter(
@@ -747,7 +749,7 @@ export class AgentRuntimeService {
     try {
       await this.completionLifecycle.dispatchHooks(operationId, interruptedState, 'interrupted');
 
-      const topicId = interruptedState.metadata?.topicId;
+      const topicId = interruptedState.origin?.topicId ?? interruptedState.metadata?.topicId;
       if (typeof topicId === 'string') {
         await new TopicModel(this.serverDB, this.userId, this.workspaceId).settleRunningOperation(
           topicId,
@@ -782,10 +784,11 @@ export class AgentRuntimeService {
     for (const childId of childIds) {
       log('[%s] Cascading interrupt to child operation %s', operationId, childId);
       try {
-        // A `false` here means the child's runtime state is gone and cannot be
-        // confirmed either way — retrying would not change that, so only a
-        // thrown (transient) failure keeps the parent's stop unacknowledged.
-        await this.interruptOperation(childId);
+        // `false` means the child could not be confirmed stopped (e.g. its
+        // runtime state is not visible on this worker while its operation row
+        // is still in flight) — it may still be generating, so the parent's
+        // stop stays unacknowledged and a retry re-runs the cascade.
+        if (!(await this.interruptOperation(childId))) allStopped = false;
       } catch (error) {
         log('[%s] Failed to interrupt child operation %s: %O', operationId, childId, error);
         allStopped = false;

@@ -2580,9 +2580,17 @@ describe('AgentRuntimeService', () => {
 
       it('interrupts every in-flight member of a parked supervisor and settles it', async () => {
         const states: Record<string, any> = {
-          'op-carol': { metadata: { topicId: 'tpc-1' }, status: 'running' },
-          'op-dave': { metadata: { threadId: 'thd-1', topicId: 'tpc-1' }, status: 'running' },
-          'op-sup': { metadata: { topicId: 'tpc-1' }, status: 'waiting_for_async_tool' },
+          'op-carol': { metadata: {}, origin: { topicId: 'tpc-1' }, status: 'running' },
+          'op-dave': {
+            metadata: {},
+            origin: { threadId: 'thd-1', topicId: 'tpc-1' },
+            status: 'running',
+          },
+          'op-sup': {
+            metadata: {},
+            origin: { topicId: 'tpc-1' },
+            status: 'waiting_for_async_tool',
+          },
         };
         mockCoordinator.loadAgentState.mockImplementation(async (id: string) => states[id]);
 
@@ -2626,9 +2634,9 @@ describe('AgentRuntimeService', () => {
 
       it('lets a retried stop finish a child cascade that failed the first time', async () => {
         const states: Record<string, any> = {
-          'op-carol': { metadata: { topicId: 'tpc-1' }, status: 'running' },
-          'op-dave': { metadata: { topicId: 'tpc-1' }, status: 'running' },
-          'op-sup': { metadata: { topicId: 'tpc-1' }, status: 'running' },
+          'op-carol': { metadata: {}, origin: { topicId: 'tpc-1' }, status: 'running' },
+          'op-dave': { metadata: {}, origin: { topicId: 'tpc-1' }, status: 'running' },
+          'op-sup': { metadata: {}, origin: { topicId: 'tpc-1' }, status: 'running' },
         };
         mockCoordinator.loadAgentState.mockImplementation(async (id: string) => states[id]);
         mockCoordinator.saveAgentState.mockImplementation(async (id: string, next: any) => {
@@ -2647,11 +2655,33 @@ describe('AgentRuntimeService', () => {
         expect(states['op-dave'].status).toBe('interrupted');
       });
 
+      it('does not acknowledge the stop while a member cannot be confirmed stopped', async () => {
+        // Carol's runtime state is not visible here but her operation row is
+        // still in flight: she may still be generating.
+        const states: Record<string, any> = {
+          'op-dave': { metadata: {}, origin: { topicId: 'tpc-1' }, status: 'running' },
+          'op-sup': {
+            metadata: {},
+            origin: { topicId: 'tpc-1' },
+            status: 'waiting_for_async_tool',
+          },
+        };
+        mockCoordinator.loadAgentState.mockImplementation(async (id: string) => states[id] ?? null);
+        findOperation.mockResolvedValue({ id: 'op-carol', status: 'running' } as any);
+
+        expect(await service.interruptOperation('op-sup')).toBe(false);
+        expect(mockCoordinator.markInterrupted).toHaveBeenCalledWith('op-dave');
+      });
+
       it('settles a member parked on approval so its stale approval cannot resume it', async () => {
         const states: Record<string, any> = {
-          'op-carol': { metadata: { topicId: 'tpc-1' }, status: 'waiting_for_human' },
-          'op-dave': { metadata: { topicId: 'tpc-1' }, status: 'running' },
-          'op-sup': { metadata: { topicId: 'tpc-1' }, status: 'waiting_for_async_tool' },
+          'op-carol': { metadata: {}, origin: { topicId: 'tpc-1' }, status: 'waiting_for_human' },
+          'op-dave': { metadata: {}, origin: { topicId: 'tpc-1' }, status: 'running' },
+          'op-sup': {
+            metadata: {},
+            origin: { topicId: 'tpc-1' },
+            status: 'waiting_for_async_tool',
+          },
         };
         mockCoordinator.loadAgentState.mockImplementation(async (id: string) => states[id]);
         const listPlugins = vi.fn().mockResolvedValue([

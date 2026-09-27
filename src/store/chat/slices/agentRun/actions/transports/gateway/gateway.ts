@@ -1393,8 +1393,13 @@ export class GatewayActionImpl {
       }
     });
 
+    // A member's approval continuation is nested inside the supervisor's run:
+    // top-level terminal effects (queue drain, unread, notification) belong to
+    // the supervisor's own terminal, not to the member's.
     const runScope = (
-      resolvedExecutionContext.scope === 'sub_agent' ? 'sub_agent' : 'top_level'
+      resolvedExecutionContext.scope === 'sub_agent' || continuesGroupMember
+        ? 'sub_agent'
+        : 'top_level'
     ) as RunScope;
     // Shared run lifecycle: drives the terminal completeRun / afterRunComplete
     // for the gateway transport (op completion + unread + queue drain +
@@ -1481,7 +1486,8 @@ export class GatewayActionImpl {
             .catch(console.error);
         }
 
-        if (result.topicId) {
+        // The supervisor still owns the topic while a member continuation ends.
+        if (result.topicId && !continuesGroupMember) {
           // The server already settled this topic: the runtime's `finish`
           // executor settles to 'unread' before it publishes the terminal event
           // this callback rides on, so by now the mark is legitimately gone and

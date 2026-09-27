@@ -362,6 +362,41 @@ describe('GatewayActionImpl — group run lifecycle', () => {
     );
   });
 
+  // A member's approval continuation ends while its supervisor keeps running:
+  // the queue the user built up waits for the supervisor, and the topic is
+  // still the supervisor's to settle.
+  it("leaves the queue and topic to the supervisor when a member's approval continuation ends (G-05)", async () => {
+    const run = setupRun();
+    run.drainQueuedMessages.mockReturnValue([
+      { content: '[STEER] 追加：请用中文', createdAt: Date.now(), files: [], id: 'q-1' },
+    ]);
+    vi.mocked(aiAgentService.execAgentTask).mockResolvedValue(
+      execResult({ agentId: 'carol-agent', operationId: 'server-member-continuation' }) as any,
+    );
+    vi.mocked(topicService.settleRunningOperation).mockClear();
+
+    await run.action.executeGatewayAgent({
+      context: GROUP_CONTEXT,
+      message: '',
+      parentMessageId: 'carol-tool',
+      resumeApproval: { decision: 'approved', parentMessageId: 'carol-tool', toolCallId: 'call-1' },
+    } as any);
+    const { onSessionComplete } = run.connectToGateway.mock.calls[0][0];
+
+    onSessionComplete({
+      authFailed: false,
+      completion: { source: 'resume_status', status: 'completed' },
+      succeeded: false,
+      terminalReceived: false,
+    });
+    await flush();
+    await new Promise((r) => setTimeout(r, 150));
+
+    expect(run.drainQueuedMessages).not.toHaveBeenCalled();
+    expect(run.sendMessage).not.toHaveBeenCalled();
+    expect(topicService.settleRunningOperation).not.toHaveBeenCalled();
+  });
+
   it('reconnects a group run into the group bucket (G-14)', async () => {
     const run = setupRun();
     vi.mocked(aiAgentService.refreshGatewayToken).mockResolvedValue({ token: 't' } as any);
