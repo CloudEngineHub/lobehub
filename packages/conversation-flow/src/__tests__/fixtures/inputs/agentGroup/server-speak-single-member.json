@@ -1,0 +1,86 @@
+[
+  {
+    "id": "msg_x6yY9DHef4rG",
+    "role": "user",
+    "content": "\\[B-01] 帮我想个 slogan",
+    "parentId": null,
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "trigger": "chat"
+    },
+    "createdAt": 1790490142841,
+    "updatedAt": 1790490142841
+  },
+  {
+    "id": "msg_6BEquG7G5NDu",
+    "role": "assistant",
+    "content": "",
+    "parentId": "msg_x6yY9DHef4rG",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "tool_calls",
+      "isSupervisor": true,
+      "orchestrationRole": "supervisor"
+    },
+    "tools": [
+      {
+        "id": "call_1",
+        "identifier": "lobe-group-management",
+        "apiName": "speak",
+        "arguments": "{\"agentId\":\"agt_OAw0WGYyFD9d\",\"instruction\":\"Write one slogan.\"}",
+        "type": "builtin"
+      }
+    ],
+    "createdAt": 1790490142847,
+    "updatedAt": 1790490145176
+  },
+  {
+    "id": "msg_qpYdPDyLgnPArkeywP",
+    "role": "tool",
+    "content": "",
+    "parentId": "msg_6BEquG7G5NDu",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "tool_call_id": "call_1",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "speak",
+      "arguments": "{\"agentId\":\"agt_OAw0WGYyFD9d\",\"instruction\":\"Write one slogan.\"}",
+      "type": "builtin"
+    },
+    "pluginState": {
+      "status": "completed"
+    },
+    "createdAt": 1790490145234,
+    "updatedAt": 1790490148070
+  },
+  {
+    "id": "msg_RyQV4sNN2IPlAp27gs",
+    "role": "assistant",
+    "content": "CAROL B01 REPLY slogan here (req #2)",
+    "parentId": "msg_6BEquG7G5NDu",
+    "agentId": "agt_OAw0WGYyFD9d",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "stop",
+      "orchestrationRole": "member"
+    },
+    "createdAt": 1790490145261,
+    "updatedAt": 1790490147797
+  },
+  {
+    "id": "msg_WhxyH60abdnzUJWkve",
+    "role": "assistant",
+    "content": "SUP B01 DONE: Carol answered.",
+    "parentId": "msg_qpYdPDyLgnPArkeywP",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "stop"
+    },
+    "createdAt": 1790490147427,
+    "updatedAt": 1790490147727
+  }
+]

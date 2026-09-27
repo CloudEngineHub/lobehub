@@ -1,0 +1,112 @@
+[
+  {
+    "id": "msg_hdmUOKZ732dy",
+    "role": "user",
+    "content": "\\[B-06] 并行派两个任务",
+    "parentId": null,
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "trigger": "chat"
+    },
+    "createdAt": 1790491065690,
+    "updatedAt": 1790491065690
+  },
+  {
+    "id": "msg_UY6dj5bd7wNw",
+    "role": "assistant",
+    "content": "",
+    "parentId": "msg_hdmUOKZ732dy",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "tool_calls",
+      "isSupervisor": true,
+      "orchestrationRole": "supervisor"
+    },
+    "tools": [
+      {
+        "id": "call_mujfy5qp_17",
+        "identifier": "lobe-group-management",
+        "apiName": "executeAgentTasks",
+        "arguments": "{\"tasks\":[{\"agentId\":\"agt_OAw0WGYyFD9d\",\"instruction\":\"Task A for Carol\",\"title\":\"Carol task A\"},{\"agentId\":\"agt_mxqPlrWSqMrn\",\"instruction\":\"Task B for Dave\",\"title\":\"Dave task B\"}]}",
+        "type": "builtin"
+      }
+    ],
+    "createdAt": 1790491065695,
+    "updatedAt": 1790491067889
+  },
+  {
+    "id": "msg_8haZDBOvFlCCduiWj0",
+    "role": "tool",
+    "content": "",
+    "parentId": "msg_UY6dj5bd7wNw",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "tool_call_id": "call_mujfy5qp_17",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "executeAgentTasks",
+      "arguments": "{\"tasks\":[{\"agentId\":\"agt_OAw0WGYyFD9d\",\"instruction\":\"Task A for Carol\",\"title\":\"Carol task A\"},{\"agentId\":\"agt_mxqPlrWSqMrn\",\"instruction\":\"Task B for Dave\",\"title\":\"Dave task B\"}]}",
+      "type": "builtin"
+    },
+    "pluginState": {
+      "status": "completed"
+    },
+    "createdAt": 1790491067948,
+    "updatedAt": 1790491072626
+  },
+  {
+    "id": "msg_r8VOzzkgNL15eKta9f",
+    "role": "tool",
+    "content": "",
+    "parentId": "msg_8haZDBOvFlCCduiWj0",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "tool_call_id": "call_mujfy5qp_17::m0",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "executeAgentTasks",
+      "arguments": "{\"tasks\":[{\"agentId\":\"agt_OAw0WGYyFD9d\",\"instruction\":\"Task A for Carol\",\"title\":\"Carol task A\"},{\"agentId\":\"agt_mxqPlrWSqMrn\",\"instruction\":\"Task B for Dave\",\"title\":\"Dave task B\"}]}",
+      "type": "builtin"
+    },
+    "pluginState": {
+      "status": "completed"
+    },
+    "createdAt": 1790491067954,
+    "updatedAt": 1790491072616
+  },
+  {
+    "id": "msg_vXYOMA4H7qKPdY4gE8",
+    "role": "tool",
+    "content": "",
+    "parentId": "msg_8haZDBOvFlCCduiWj0",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "tool_call_id": "call_mujfy5qp_17::m1",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "executeAgentTasks",
+      "arguments": "{\"tasks\":[{\"agentId\":\"agt_OAw0WGYyFD9d\",\"instruction\":\"Task A for Carol\",\"title\":\"Carol task A\"},{\"agentId\":\"agt_mxqPlrWSqMrn\",\"instruction\":\"Task B for Dave\",\"title\":\"Dave task B\"}]}",
+      "type": "builtin"
+    },
+    "pluginState": {
+      "status": "completed"
+    },
+    "createdAt": 1790491067959,
+    "updatedAt": 1790491072615
+  },
+  {
+    "id": "msg_qnepo51tVrQaT1M2R3",
+    "role": "assistant",
+    "content": "SUP B06 DONE: both tasks returned.",
+    "parentId": "msg_8haZDBOvFlCCduiWj0",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "stop"
+    },
+    "createdAt": 1790491074145,
+    "updatedAt": 1790491074462
+  }
+]
