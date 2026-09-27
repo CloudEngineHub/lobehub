@@ -250,7 +250,7 @@ export class SkillParser {
         if (description) break;
         if (!name && headingMarker === '#') {
           // Drop optional closing hashes: `# Title #`
-          const title = line.slice(1).replace(/\s#+$/, '').trim();
+          const title = toPlainText(line.slice(1).replace(/\s#+$/, ''));
           if (title) name = title;
         }
         continue;

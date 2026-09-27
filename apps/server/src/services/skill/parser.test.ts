@@ -299,6 +299,17 @@ Some paragraph that must not become the description.`;
       );
     });
 
+    it('should derive a plain-text name from an H1 with inline Markdown', () => {
+      for (const heading of [
+        '**Stock Watcher**',
+        '`Stock Watcher`',
+        '[Stock Watcher](https://example.com)',
+      ]) {
+        const result = parser.parseSkillMd(`# ${heading}\n\nWatches prices.\n`);
+        expect(result.manifest.name).toBe('Stock Watcher');
+      }
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),
