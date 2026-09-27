@@ -8,6 +8,7 @@ import type { MockInstance } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentOperationModel } from '@/database/models/agentOperation';
+import type * as TopicModelModule from '@/database/models/topic';
 
 import { AgentRuntimeService, createEvalToolForwardingHook } from './AgentRuntimeService';
 import { hookDispatcher } from './hooks';
@@ -65,7 +66,7 @@ const { mockSettleTopicRunningOperation } = vi.hoisted(() => ({
 }));
 
 vi.mock('@/database/models/topic', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/database/models/topic')>();
+  const actual = await importOriginal<typeof TopicModelModule>();
   return {
     ...actual,
     TopicModel: vi.fn(function (this: any, ...args: any[]) {

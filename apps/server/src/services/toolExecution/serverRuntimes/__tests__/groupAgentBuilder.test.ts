@@ -331,8 +331,7 @@ describe('groupAgentBuilderRuntime', () => {
       const result = await createRuntime('ws_1').updateConfig({ model: 'gpt-5' }, groupCtx);
 
       expect(result).toEqual({
-        content:
-          'Failed to update agent config: You do not have permission to edit this resource',
+        content: 'Failed to update agent config: You do not have permission to edit this resource',
         success: false,
       });
       expect(mockBuilderUpdateConfig).not.toHaveBeenCalled();
