@@ -1321,6 +1321,8 @@ describe('StreamingExecutor actions', () => {
         expect.any(Object),
         undefined,
         expect.objectContaining({ executionEnv: 'local' }),
+        // Not a `/goal` turn: no exclusive tool set.
+        undefined,
       );
       const localSystem = state.operationToolSet?.manifestMap['lobe-local-system'];
       const readFile = localSystem?.api.find((api: LobeChatPluginApi) => api.name === 'readFile');
@@ -1922,6 +1924,77 @@ describe('StreamingExecutor actions', () => {
       // Note: The actual content depends on what plugins are resolved,
       // but the key point is they should not be empty (unless no plugins are configured)
       expect(stateWithoutDisable.toolManifestMap).toEqual(stateWithDisableFalse.toolManifestMap);
+    });
+  });
+
+  describe('internal_createAgentState /goal turn', () => {
+    const createUserMessage = (content: string) =>
+      ({
+        content,
+        id: TEST_IDS.USER_MESSAGE_ID,
+        role: 'user',
+        sessionId: TEST_IDS.SESSION_ID,
+        topicId: TEST_IDS.TOPIC_ID,
+      }) as UIChatMessage;
+
+    beforeEach(() => {
+      act(() => {
+        useChatStore.setState({ executeClientAgent: realExecAgentRuntime });
+      });
+      // A function-calling model, so the run is not forced into chat mode.
+      useAiInfraStore.setState({
+        enabledAiModels: [
+          {
+            abilities: { functionCall: true },
+            id: 'deepseek-chat',
+            providerId: 'deepseek',
+            type: 'chat',
+          } as EnabledAiModel,
+        ],
+      });
+      vi.spyOn(agentConfigResolver, 'resolveAgentConfig').mockReturnValue({
+        agentConfig: createMockAgentConfig({ model: 'deepseek-chat', provider: 'deepseek' }),
+        chatConfig: createMockChatConfig(),
+        isBuiltinAgent: false,
+        plugins: [],
+      });
+    });
+
+    it('gives a /goal turn exactly the goal tool, so createGoal is callable', () => {
+      const { result } = renderHook(() => useChatStore());
+      const userMessage = createUserMessage('/goal ship the pricing page redesign by Friday');
+
+      const { state } = result.current.internal_createAgentState({
+        agentId: TEST_IDS.SESSION_ID,
+        messages: [userMessage],
+        parentMessageId: userMessage.id,
+        topicId: TEST_IDS.TOPIC_ID,
+      });
+
+      // Mirrors the server's goal turn (toolDiscovery): the tool set is exactly
+      // lobe-goal — it is `discoverable: false`, so activateTools could never
+      // add it mid-run.
+      expect(state.operationToolSet?.enabledToolIds).toEqual(['lobe-goal']);
+      expect(state.operationToolSet?.manifestMap['lobe-goal']).toBeDefined();
+      expect(
+        state.operationToolSet?.tools.some((tool) => tool.function.name.includes('createGoal')),
+      ).toBe(true);
+    });
+
+    it('keeps the normal tool set for a turn that does not start with /goal', () => {
+      const { result } = renderHook(() => useChatStore());
+      const userMessage = createUserMessage('What is our goal for the pricing page?');
+
+      const { state } = result.current.internal_createAgentState({
+        agentId: TEST_IDS.SESSION_ID,
+        messages: [userMessage],
+        parentMessageId: userMessage.id,
+        topicId: TEST_IDS.TOPIC_ID,
+      });
+
+      // Agent mode as usual: the activator is there, the goal tool is not.
+      expect(state.operationToolSet?.enabledToolIds).toContain('lobe-activator');
+      expect(state.operationToolSet?.enabledToolIds).not.toContain('lobe-goal');
     });
   });
 

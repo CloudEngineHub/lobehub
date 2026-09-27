@@ -11,6 +11,7 @@ import {
   GeneralChatAgent,
   isParkedStatus,
 } from '@lobechat/agent-runtime';
+import { GoalIdentifier, isGoalPrompt } from '@lobechat/builtin-tool-goal';
 import { LobeAgentManifest } from '@lobechat/builtin-tool-lobe-agent';
 import { createPathScopeAudit } from '@lobechat/builtin-tool-local-system';
 import { PageAgentIdentifier } from '@lobechat/builtin-tool-page-agent';
@@ -242,22 +243,31 @@ export class StreamingExecutorActionImpl {
           !isCanUseVision(agentConfigData.model, agentConfigData.provider!)) ||
         (mediaAvailability.hasVideos &&
           !isCanUseVideo(agentConfigData.model, agentConfigData.provider!)));
+    // A `/goal` turn's only job is to call createGoal — the goal's coordinator
+    // then owns the work. Mirror the server (`toolDiscovery`): the run's tool set
+    // is exactly the goal tool plus turn-scoped builtins, in `custom` tool mode.
+    // Listing it as a selected tool is not enough: that only preloads its
+    // instructions, and `lobe-goal` is not discoverable, so activateTools can't
+    // add it mid-run either.
+    const latestUserMessage = messages.findLast((m) => m.role === 'user');
+    const isGoalTurn = !disableTools && isGoalPrompt(latestUserMessage?.content);
     const runtimePluginIds = [
       ...new Set([
-        ...(pluginIds || []),
+        ...(isGoalTurn ? [GoalIdentifier] : pluginIds || []),
         ...(hasTopicReference ? ['lobe-topic-reference'] : []),
         ...(shouldEnableMultimodalUnderstanding ? [LobeAgentManifest.identifier] : []),
       ]),
     ];
     const effectivePluginIds = runtimePluginIds.length > 0 ? runtimePluginIds : undefined;
     const mergedToolIds =
-      selectedToolIds && selectedToolIds.length > 0
+      !isGoalTurn && selectedToolIds && selectedToolIds.length > 0
         ? [...new Set([...runtimePluginIds, ...selectedToolIds])]
         : effectivePluginIds;
 
     log(
-      '[internal_createAgentState] resolved plugins=%o, isSubAgent=%s, disableTools=%s, hasTopicReference=%s',
+      '[internal_createAgentState] resolved plugins=%o, isGoalTurn=%s, isSubAgent=%s, disableTools=%s, hasTopicReference=%s',
       effectivePluginIds,
+      isGoalTurn,
       isSubAgent,
       disableTools,
       hasTopicReference,
@@ -278,6 +288,7 @@ export class StreamingExecutorActionImpl {
       // sub-agent runs. Desktop client runs also need the local environment so
       // local-system can advertise IPC-only capabilities such as direct image reads.
       { executionEnv: isDesktop ? 'local' : undefined, isSubAgent, scope },
+      isGoalTurn ? { exclusivePluginIds: runtimePluginIds } : undefined,
     );
     // When skillActivateMode is 'manual':
     // Exclude only discovery tools (activator, skill-store) so runtime-managed defaults

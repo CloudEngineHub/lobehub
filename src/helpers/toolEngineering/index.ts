@@ -143,11 +143,23 @@ export const createAgentToolsEngine = (
   pluginIds?: string[],
   /** Conversation context for context-aware builtin manifests (scope, isSubAgent). */
   manifestContext?: BuiltinToolResolveContext,
+  options: {
+    /**
+     * When set, the run's tool set is exactly these identifiers (`custom` tool
+     * mode: no defaults, no activator) instead of the agent's own tools. The
+     * client mirror of the server's exclusive tool sets, e.g. a `/goal` turn.
+     */
+    exclusivePluginIds?: string[];
+  } = {},
 ) => {
+  const { exclusivePluginIds } = options;
   const searchConfig = getSearchConfig(workingModel.model, workingModel.provider);
   const agentState = getAgentStoreState();
   const activeAgentId = agentState.activeAgentId || '';
-  const chatConfig = agentChatConfigSelectors.currentChatConfig(agentState);
+  const agentChatConfig = agentChatConfigSelectors.currentChatConfig(agentState);
+  const chatConfig = exclusivePluginIds
+    ? { ...agentChatConfig, toolMode: 'custom' as const }
+    : agentChatConfig;
 
   // The rules — mode, per-tool enablement and defaults — are shared with the
   // server runtime through `@lobechat/mecha`; the browser only assembles its
@@ -157,7 +169,7 @@ export const createAgentToolsEngine = (
     agent: {
       chatConfig,
       // `currentAgentPlugins` already resolves to pinned-only identifiers.
-      plugins: agentSelectors.currentAgentPlugins(agentState),
+      plugins: exclusivePluginIds ?? agentSelectors.currentAgentPlugins(agentState),
     },
     disabledPluginIds: agentSelectors.currentAgentDisabledPlugins(agentState),
     executionTarget: chatConfigByIdSelectors.getExecutionTargetById(activeAgentId)(agentState),
