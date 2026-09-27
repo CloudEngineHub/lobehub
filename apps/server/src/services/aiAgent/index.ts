@@ -1566,6 +1566,7 @@ export class AiAgentService {
           // resume through the group bridge (its own timeout), not the sub-agent one.
           orchestrationRole: 'member',
           resumeParentOnComplete: true,
+          userInterventionConfig: params.userInterventionConfig,
         },
       );
 
