@@ -103,8 +103,17 @@ export const machinePayment = (config: MachinePaymentConfig): MiddlewareHandler 
     // This runs before `resolvePrice` on purpose. Pricing is a separate backend
     // and it can be down; resolving first would make callers who never pay
     // depend on its availability to reach a route they already have access to.
+    //
+    // A resolved `userId` counts too: the app-wide `userAuthMiddleware` runs
+    // first, and its development bypass authenticates a request that carries no
+    // `Authorization` header at all. The header check still matters for a bad
+    // token, which leaves `userId` unset and must reach the auth chain's 401.
     const authorization = c.req.header('Authorization');
-    if (authorization && !Credential.extractPaymentScheme(authorization)) {
+    const alreadyAuthenticated = Boolean(c.get('userId'));
+    if (
+      alreadyAuthenticated ||
+      (authorization && !Credential.extractPaymentScheme(authorization))
+    ) {
       c.set('machinePaymentTier', 'authenticated');
       return next();
     }

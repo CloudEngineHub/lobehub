@@ -89,11 +89,22 @@ const createTestMethod = (settlements: Settlement[]) => {
 
 // ---------------------------------------------------------------------------
 
-/** Stands in for `userAuthMiddleware`, minus the database. */
+/**
+ * Stands in for the app-wide `userAuthMiddleware`, minus the database. Like the
+ * real one it runs before route middleware and only *records* who the caller
+ * is — including its development bypass, which authenticates a request that
+ * carries no `Authorization` header at all.
+ */
+const fakeUserAuth: MiddlewareHandler = async (c, next) => {
+  const isApiKey = c.req.header('Authorization')?.startsWith('Bearer sk-lh-');
+  const isDevBypass = c.req.header('lobe-auth-dev-backend-api') === '1';
+  if (isApiKey || isDevBypass) (c as any).set('userId', isDevBypass ? 'DEV_USER' : 'user-1');
+  return next();
+};
+
+/** Stands in for `requireAuth`: the gate reads the resolved user, not headers. */
 const fakeAuth: MiddlewareHandler = async (c, next) =>
-  c.req.header('Authorization')?.startsWith('Bearer sk-lh-')
-    ? next()
-    : c.json({ error: 'unauthorized' }, 401);
+  (c as any).get('userId') ? next() : c.json({ error: 'unauthorized' }, 401);
 
 /**
  * Stands in for the cloud override of `resolvePrice`. The open-source stub
@@ -139,6 +150,7 @@ const createApp = (options: AppOptions = {}) => {
   });
 
   const app = new Hono();
+  app.use('*', fakeUserAuth);
   const handler = (c: any) => c.json({ ok: true, tier: c.get('machinePaymentTier') });
 
   app.get('/ping', pay, requirePaymentOr(fakeAuth), handler);
@@ -332,6 +344,16 @@ describe('machinePayment', () => {
       const res = await app.request('/search', { headers: { Authorization: 'Bearer nope' } });
 
       expect(res.status).toBe(401);
+      expect(settlements).toHaveLength(0);
+    });
+
+    it('serves a caller authenticated without an Authorization header', async () => {
+      // The development bypass resolves a user from a debug header alone, so a
+      // header-only check would treat this authenticated caller as anonymous.
+      const res = await app.request('/search', { headers: { 'lobe-auth-dev-backend-api': '1' } });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, tier: 'authenticated' });
       expect(settlements).toHaveLength(0);
     });
 
