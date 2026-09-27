@@ -1,7 +1,7 @@
 'use client';
 
 import { Block, Empty, Flexbox, Icon, SortableList } from '@lobehub/ui';
-import { Button, Text } from '@lobehub/ui/base-ui';
+import { Button, Text, toast } from '@lobehub/ui/base-ui';
 import { cx } from 'antd-style';
 import { FlaskConicalIcon, PencilIcon, PlusIcon, ScaleIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -91,10 +91,24 @@ const MemoryRules = () => {
       { revalidate: false },
     );
 
-  const updateRule = async (id: string, patch: UpdateRuleInput) => {
-    if (patch.enforcement) await patchLocal(id, { enforcement: patch.enforcement });
-    await expertiseService.updateRule(id, patch);
+  // Optimistic writes must not outlive a failed request: re-read the server's truth and say so.
+  const recover = async (error: unknown) => {
+    console.error('[MemoryRules] write failed:', error);
+    toast.error(t('rules.saveFailed'));
     await refresh();
+  };
+
+  /** Resolves to whether the change was saved, so callers keep unsaved input on failure. */
+  const updateRule = async (id: string, patch: UpdateRuleInput) => {
+    try {
+      if (patch.enforcement) await patchLocal(id, { enforcement: patch.enforcement });
+      await expertiseService.updateRule(id, patch);
+      await refresh();
+      return true;
+    } catch (error) {
+      await recover(error);
+      return false;
+    }
   };
 
   const reorder = async (domainId: string, items: RuleItem[]) => {
@@ -110,11 +124,15 @@ const MemoryRules = () => {
         },
       { revalidate: false },
     );
-    await expertiseService.reorderRules(
-      domainId,
-      items.map((rule) => rule.id),
-    );
-    await refresh();
+    try {
+      await expertiseService.reorderRules(
+        domainId,
+        items.map((rule) => rule.id),
+      );
+      await refresh();
+    } catch (error) {
+      await recover(error);
+    }
   };
 
   const run = async (action: () => Promise<unknown>) => {
@@ -141,6 +159,8 @@ const MemoryRules = () => {
   const select = (id: string) => {
     setTitleEditing(false);
     if (mergeFrom && mergeFrom !== id) {
+      // Only a rule still in force can absorb another; archived rows are not targets.
+      if (all.find((rule) => rule.id === id)?.status !== 'active') return;
       const target = id;
       void run(async () => {
         await expertiseService.mergeRules(mergeFrom, target);
@@ -342,11 +362,13 @@ const MemoryRules = () => {
             rule={selected}
             titleEditing={titleEditing}
             onTitleEditing={setTitleEditing}
-            onUpdate={(patch) => (selected ? updateRule(selected.id, patch) : Promise.resolve())}
             onClose={() => {
               setSelectedId(undefined);
               setTitleEditing(false);
             }}
+            onUpdate={(patch) =>
+              selected ? updateRule(selected.id, patch) : Promise.resolve(false)
+            }
           />
         )}
       </Flexbox>

@@ -8,6 +8,26 @@ export type RuleSectionKey = 'rule' | 'why' | 'how' | 'limits';
 export const sectionBody = (rule: Pick<RuleItem, 'sections'>, key: RuleSectionKey) =>
   rule.sections?.find((section) => section.key === key)?.body?.trim() || undefined;
 
+/**
+ * The "when it does not apply" text after adding one more exception. Exceptions accumulate: the
+ * composer adds a line, it never replaces what the reviewer already narrowed.
+ */
+/**
+ * What distillation writes into `limits` when the reviewer drew no boundary (see the ingestion
+ * prompt in `@lobechat/prompts`). It means "none yet", so the first real exception replaces it
+ * rather than sitting under it — the same thing consolidation does.
+ */
+const UNSTATED_LIMITS = new Set(['边界未由评审者说明']);
+
+export const appendException = (existing: string | undefined, exception: string) => {
+  const next = exception.trim();
+  const trimmed = existing?.trim();
+  const current = trimmed && !UNSTATED_LIMITS.has(trimmed) ? trimmed : undefined;
+  if (!current) return next;
+  if (!next || current.split('\n').some((line) => line.trim() === next)) return current;
+  return `${current}\n${next}`;
+};
+
 /** Where a rule went when it was archived by a merge, or null for a plain archive. */
 export const mergedIntoId = (rule: Pick<RuleItem, 'rejectedReason'>) =>
   rule.rejectedReason?.startsWith('merged-into:')

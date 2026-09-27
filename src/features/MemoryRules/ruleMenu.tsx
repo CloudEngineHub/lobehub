@@ -11,6 +11,8 @@ import {
 
 import type { RuleGroup, RuleItem } from '@/services/expertise';
 
+import { mergedIntoId } from './labels';
+
 export interface RuleHandlers {
   archive: (id: string) => void;
   edit: (id: string) => void;
@@ -30,6 +32,7 @@ export const buildRuleMenu = (
   h: RuleHandlers,
 ): DropdownItem[] => {
   const archived = rule.status === 'retired';
+  const mergedInto = mergedIntoId(rule);
   const others = groups.filter((group) => group.domain.id !== rule.domainId);
   return [
     ...(archived
@@ -64,12 +67,22 @@ export const buildRuleMenu = (
           { type: 'divider' as const },
         ]),
     archived
-      ? {
-          icon: <Icon icon={ArchiveRestoreIcon} />,
-          key: 'restore',
-          label: t('rules.actions.restore'),
-          onClick: () => h.restore(rule.id),
-        }
+      ? // A rule merged into another lives on in that one; restoring it would count it twice,
+        // so the menu says where it went instead of offering to bring it back.
+        mergedInto
+        ? {
+            disabled: true,
+            key: 'merged',
+            label: t('rules.archived.mergedInto', {
+              title: groups.flatMap((g) => g.rules).find((r) => r.id === mergedInto)?.title ?? '',
+            }),
+          }
+        : {
+            icon: <Icon icon={ArchiveRestoreIcon} />,
+            key: 'restore',
+            label: t('rules.actions.restore'),
+            onClick: () => h.restore(rule.id),
+          }
       : {
           danger: true,
           icon: <Icon icon={ArchiveIcon} />,

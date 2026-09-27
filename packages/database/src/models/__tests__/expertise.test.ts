@@ -560,6 +560,142 @@ describe('ExpertiseModel', () => {
     });
   });
 
+  it('refuses to fold into, or restore, a rule a merge already accounted for', async () => {
+    const { first, second } = await seedRuleGroup();
+    const model = new ExpertiseModel(serverDB, userId);
+    await model.mergeRules(second, first);
+
+    // The source now lives inside the target; restoring it would count its history twice.
+    expect(await model.restoreLesson(second)).toBeNull();
+    expect(await model.findLesson(second)).toMatchObject({ status: 'retired' });
+
+    // An archived rule is not a merge target: nothing would be left in force.
+    const third = '0d3e1a5c-6f52-4c2e-8f2a-9f2d3f26b105';
+    await serverDB.insert(expertiseLessons).values({
+      code: 'P-03',
+      domainId: 'rules-domain',
+      id: third,
+      polarity: 'rule',
+      sections: [{ body: '第三条', key: 'rule' }],
+      title: '第三条',
+    });
+    expect(await model.mergeRules(third, second)).toBeNull();
+    expect(await model.findLesson(third)).toMatchObject({ status: 'active' });
+    expect(await model.findLesson(first)).toMatchObject({ hitCount: 9 });
+  });
+
+  it('keeps the evidence of a rule merged twice over', async () => {
+    const { first, second } = await seedRuleGroup();
+    await seedHitOn(second);
+    const third = '0d3e1a5c-6f52-4c2e-8f2a-9f2d3f26b105';
+    await serverDB.insert(expertiseLessons).values({
+      code: 'P-03',
+      domainId: 'rules-domain',
+      id: third,
+      polarity: 'rule',
+      sections: [{ body: '第三条', key: 'rule' }],
+      title: '第三条',
+    });
+    const model = new ExpertiseModel(serverDB, userId);
+
+    await model.mergeRules(second, first);
+    await model.mergeRules(first, third);
+
+    // The hit sits on the grandparent of `third`; one level of lineage would lose it.
+    expect((await model.listLessonSources(third)).map(({ example }) => example)).toEqual([
+      '你应该用 cssVar 的吧',
+    ]);
+  });
+
+  it("does not show a teammate's private round behind a shared rule", async () => {
+    const teammate = 'expertise-rules-teammate';
+    const workspaceId = 'rules-workspace';
+    await serverDB.insert(users).values({ id: teammate });
+    await serverDB
+      .insert(workspaces)
+      .values({ id: workspaceId, name: 'Team', primaryOwnerId: userId, slug: 'rules-team' });
+    await serverDB.insert(expertiseDomains).values({
+      anchorChosenAt: new Date(),
+      domainFilter: '团队规矩',
+      id: 'shared-domain',
+      slug: 'shared-domain',
+      title: '团队规矩',
+      userId,
+      workspaceId,
+    });
+    const lesson = '0d3e1a5c-6f52-4c2e-8f2a-9f2d3f26b106';
+    await serverDB.insert(expertiseLessons).values({
+      code: 'P-01',
+      domainId: 'shared-domain',
+      id: lesson,
+      polarity: 'rule',
+      sections: [{ body: '共享规矩', key: 'rule' }],
+      title: '共享规矩',
+    });
+    await serverDB.insert(expertiseRuns).values({
+      actorId: 'agent-1',
+      actorType: 'agent',
+      domainId: 'shared-domain',
+      id: runId,
+      runIndex: 1,
+      subjectId: 'x',
+      subjectType: 'standalone',
+      userId,
+      workspaceId,
+    });
+    const privateRun = 'b3f9b0c6-6d0e-4f2e-9b1a-2c4d5e6f7a01';
+    const publicRun = 'b3f9b0c6-6d0e-4f2e-9b1a-2c4d5e6f7a02';
+    await serverDB.insert(verifyRuns).values([
+      { id: privateRun, userId: teammate, visibility: 'private', workspaceId },
+      { id: publicRun, userId: teammate, visibility: 'public', workspaceId },
+    ]);
+    const [privateCheck, publicCheck] = await serverDB
+      .insert(verifyCheckResults)
+      .values([
+        {
+          checkItemId: 'chk-private',
+          checkItemTitle: '私有轮次的检查项',
+          userDecision: 'rejected',
+          userId: teammate,
+          verifierType: 'llm',
+          verifyRunId: privateRun,
+          workspaceId,
+        },
+        {
+          checkItemId: 'chk-public',
+          checkItemTitle: '公开轮次的检查项',
+          userDecision: 'rejected',
+          userId: teammate,
+          verifierType: 'llm',
+          verifyRunId: publicRun,
+          workspaceId,
+        },
+      ])
+      .returning({ id: verifyCheckResults.id });
+    await serverDB.insert(expertiseHits).values([
+      {
+        domainId: 'shared-domain',
+        lessonId: lesson,
+        outcome: 'violation',
+        runId,
+        sourceCheckResultId: privateCheck.id,
+      },
+      {
+        domainId: 'shared-domain',
+        lessonId: lesson,
+        outcome: 'violation',
+        runId,
+        sourceCheckResultId: publicCheck.id,
+      },
+    ]);
+
+    const sources = await new ExpertiseModel(serverDB, userId, workspaceId).listLessonSources(
+      lesson,
+    );
+
+    expect(sources.map(({ checkTitle }) => checkTitle)).toEqual(['公开轮次的检查项']);
+  });
+
   it('reuses a group the reviewer already has instead of opening a second one', async () => {
     await seedRuleGroup();
     const model = new ExpertiseModel(serverDB, userId);
@@ -667,6 +803,43 @@ describe('ExpertiseModel', () => {
 
     await expect(
       new ExpertiseModel(serverDB, userId).countUndistilledRejectionRounds(),
+    ).resolves.toBe(1);
+  });
+
+  it('counts the backlog of the scope being viewed only', async () => {
+    const workspaceId = 'backlog-workspace';
+    await serverDB
+      .insert(workspaces)
+      .values({ id: workspaceId, name: 'Team', primaryOwnerId: userId, slug: 'backlog-team' });
+    const personalRun = 'c3f9b0c6-6d0e-4f2e-9b1a-2c4d5e6f7a01';
+    const workspaceRun = 'c3f9b0c6-6d0e-4f2e-9b1a-2c4d5e6f7a02';
+    await serverDB.insert(verifyRuns).values([
+      { id: personalRun, userId },
+      { id: workspaceRun, userId, workspaceId },
+    ]);
+    await serverDB.insert(verifyCheckResults).values([
+      {
+        checkItemId: 'chk-personal',
+        userDecision: 'rejected',
+        userId,
+        verifierType: 'llm',
+        verifyRunId: personalRun,
+      },
+      {
+        checkItemId: 'chk-workspace',
+        userDecision: 'rejected',
+        userId,
+        verifierType: 'llm',
+        verifyRunId: workspaceRun,
+        workspaceId,
+      },
+    ]);
+
+    await expect(
+      new ExpertiseModel(serverDB, userId).countUndistilledRejectionRounds(),
+    ).resolves.toBe(1);
+    await expect(
+      new ExpertiseModel(serverDB, userId, workspaceId).countUndistilledRejectionRounds(),
     ).resolves.toBe(1);
   });
 });

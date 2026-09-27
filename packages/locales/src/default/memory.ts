@@ -125,7 +125,7 @@ export default {
   'rules.compose.describePlaceholder':
     'Say in one sentence what you require, or paste a document. The rule is drafted from it.',
   'rules.compose.describeTitle': 'Write a rule',
-  'rules.compose.enforcementBlock': 'Block · not done, not delivered',
+  'rules.compose.enforcementBlock': 'Block · will hold the delivery (not in effect yet)',
   'rules.compose.enforcementRemind': 'Remind · nudges the agent only',
   'rules.compose.generateFailed': 'Could not draft it. Fill it in yourself.',
   'rules.compose.generating': 'Drafting the rule…',
@@ -148,8 +148,10 @@ export default {
   'rules.empty.title': 'No rules yet',
   'rules.empty.write': 'Or write one first',
   'rules.enforcement.block': 'Block',
-  'rules.enforcement.blockDesc': 'Not done, not delivered',
-  'rules.enforcement.blockHint': 'Block: not done, not delivered. Click to switch to remind',
+  'rules.enforcement.blockDesc':
+    'Will hold the delivery until you let it through. Not in effect yet: for now it only reminds',
+  'rules.enforcement.blockHint':
+    'Block: will hold the delivery (not in effect yet, reminds for now). Click to switch to remind',
   'rules.enforcement.remind': 'Remind',
   'rules.enforcement.remindDesc': 'Nudges the agent only; never holds a delivery',
   'rules.enforcement.remindHint': 'Remind: nudges the agent only. Click to switch to block',
@@ -224,6 +226,7 @@ export default {
   'rules.runs.detail': 'Checked {{runs}} times, caught {{hits}}',
   'rules.runs.none': 'Not checked yet',
   'rules.runs.overruled': 'you overruled it {{count}} times',
+  'rules.saveFailed': 'Could not save that change. The page now shows what is actually saved.',
   'rules.scope.agent': 'agent {{title}}',
   'rules.scope.project': 'project {{title}}',
   'rules.scope.user': 'all your runs',

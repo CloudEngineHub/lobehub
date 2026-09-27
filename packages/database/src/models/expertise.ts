@@ -303,13 +303,8 @@ export class ExpertiseModel {
    * row rather than dropping the evidence.
    */
   listLessonSources = async (lessonId: string, limit = 20) => {
-    const lesson = await this.findLesson(lessonId);
-    if (!lesson) return [];
-    const lineage = [
-      lessonId,
-      ...(lesson.generalizedFromIds ?? []),
-      ...(lesson.salvagedFromId ? [lesson.salvagedFromId] : []),
-    ];
+    const lineage = await this.resolveLineage(lessonId);
+    if (lineage.length === 0) return [];
     return this.db
       .select({
         acceptanceId: verifyRuns.acceptanceId,
@@ -327,9 +322,55 @@ export class ExpertiseModel {
       .innerJoin(expertiseDomains, eq(expertiseDomains.id, expertiseHits.domainId))
       .leftJoin(verifyCheckResults, eq(verifyCheckResults.id, expertiseHits.sourceCheckResultId))
       .leftJoin(verifyRuns, eq(verifyRuns.id, verifyCheckResults.verifyRunId))
-      .where(and(inArray(expertiseHits.lessonId, lineage), this.scopeWhere()))
+      .where(
+        and(
+          inArray(expertiseHits.lessonId, lineage),
+          this.scopeWhere(),
+          // Access to a shared group is not access to the rounds behind it: a hit distilled from
+          // a teammate's private round would otherwise show that round's check, the reviewer's
+          // words and a link to it. Same predicate the consolidation reader applies.
+          or(
+            isNull(verifyCheckResults.id),
+            eq(verifyCheckResults.userId, this.userId),
+            eq(verifyRuns.visibility, 'public'),
+          ),
+        ),
+      )
       .orderBy(desc(expertiseHits.createdAt))
       .limit(limit);
+  };
+
+  /**
+   * Every lesson whose evidence this one now speaks for: itself, what it absorbed through merges
+   * (`generalizedFromIds`) and what it was re-filed from (`salvagedFromId`), followed through as
+   * many generations as there are. One level is not enough — merging a rule that was itself a
+   * merge would otherwise keep the counts and lose the evidence.
+   */
+  private resolveLineage = async (lessonId: string): Promise<string[]> => {
+    const root = await this.findLesson(lessonId);
+    if (!root) return [];
+    const seen = new Set<string>([lessonId]);
+    let frontier: Pick<typeof root, 'generalizedFromIds' | 'salvagedFromId'>[] = [root];
+    // Bounded so a malformed cycle can never spin; real lineages are a handful of steps deep.
+    for (let depth = 0; depth < 16 && frontier.length > 0; depth += 1) {
+      const next = frontier
+        .flatMap((lesson) => [
+          ...(lesson.generalizedFromIds ?? []),
+          ...(lesson.salvagedFromId ? [lesson.salvagedFromId] : []),
+        ])
+        .filter((id) => !seen.has(id));
+      if (next.length === 0) break;
+      for (const id of next) seen.add(id);
+      frontier = await this.db
+        .select({
+          generalizedFromIds: expertiseLessons.generalizedFromIds,
+          salvagedFromId: expertiseLessons.salvagedFromId,
+        })
+        .from(expertiseLessons)
+        .innerJoin(expertiseDomains, eq(expertiseDomains.id, expertiseLessons.domainId))
+        .where(and(inArray(expertiseLessons.id, next), this.scopeWhere()));
+    }
+    return [...seen];
   };
 
   /**
@@ -348,6 +389,10 @@ export class ExpertiseModel {
       .where(
         and(
           eq(verifyCheckResults.userId, this.userId),
+          // The page is either the personal view or one workspace's; count only that scope.
+          this.workspaceId
+            ? eq(verifyCheckResults.workspaceId, this.workspaceId)
+            : isNull(verifyCheckResults.workspaceId),
           eq(verifyCheckResults.userDecision, 'rejected'),
           isNotNull(verifyCheckResults.verifyRunId),
           sql`not exists (
@@ -801,6 +846,10 @@ export class ExpertiseModel {
   restoreLesson = async (lessonId: string) => {
     const lesson = await this.findLesson(lessonId);
     if (!lesson) return null;
+    // A rule archived by a merge already lives on inside its target: its counts were added there
+    // and its evidence is read through the target's lineage. Bringing it back would count the
+    // same history twice, so it stays archived.
+    if (lesson.rejectedReason?.startsWith('merged-into:')) return null;
     await this.db
       .update(expertiseLessons)
       .set({ retiredAt: null, status: 'active', updatedAt: new Date() })
@@ -1033,6 +1082,8 @@ export class ExpertiseModel {
     if (fromId === intoId) return null;
     const [from, into] = await Promise.all([this.findLesson(fromId), this.findLesson(intoId)]);
     if (!from || !into) return null;
+    // Folding into an archived rule would leave neither rule in force.
+    if (from.status !== 'active' || into.status !== 'active') return null;
 
     const revision = into.currentRevision + 1;
     await this.db.transaction(async (tx) => {

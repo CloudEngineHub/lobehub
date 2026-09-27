@@ -32,7 +32,7 @@ import type { RuleGroup, RuleItem, UpdateRuleInput } from '@/services/expertise'
 
 import Field from './Field';
 import { useRuleRevisions, useRuleSources } from './hooks';
-import { mergedIntoId, sectionBody, useScopeLabel } from './labels';
+import { appendException, mergedIntoId, sectionBody, useScopeLabel } from './labels';
 
 const styles = createStaticStyles(({ css }) => ({
   body: css`
@@ -206,7 +206,8 @@ interface RuleDocumentProps {
   groups: RuleGroup[];
   menu: DropdownItem[];
   onTitleEditing: (editing: boolean) => void;
-  onUpdate: (patch: UpdateRuleInput) => Promise<unknown>;
+  /** Resolves to whether the change was saved. */
+  onUpdate: (patch: UpdateRuleInput) => Promise<boolean>;
   rule: RuleItem;
   titleEditing: boolean;
 }
@@ -246,11 +247,12 @@ const RuleDocument = ({
   const mergedInto = mergedIntoId(rule);
 
   const save = async (patch: UpdateRuleInput) => {
-    if (busy) return;
+    if (busy) return false;
     setBusy(true);
     try {
-      await onUpdate(patch);
-      await mutateRevisions();
+      const saved = await onUpdate(patch);
+      if (saved) await mutateRevisions();
+      return saved;
     } finally {
       setBusy(false);
     }
@@ -265,7 +267,10 @@ const RuleDocument = ({
   const addException = () => {
     const text = exception.trim();
     if (!text) return;
-    void save({ sections: { limits: text } }).then(() => setException(''));
+    // Keep what they typed if the save did not land.
+    void save({ sections: { limits: appendException(sectionBody(rule, 'limits'), text) } }).then(
+      (saved) => saved && setException(''),
+    );
   };
 
   const choose = <T extends string>(
