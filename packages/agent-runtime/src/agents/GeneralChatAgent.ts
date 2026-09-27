@@ -1,6 +1,7 @@
 import { ToolNameResolver } from '@lobechat/context-engine';
 import {
   type ChatToolPayload,
+  describeLockedDevicePicker,
   type ExtendedHumanInterventionConfig,
   type HumanInterventionConfig,
   type HumanInterventionPolicy,
@@ -39,6 +40,8 @@ const TOOL_NOT_ALLOWED_REASON = 'tool_not_allowed';
  */
 const unresolvedToolContent = (names: string) =>
   `Tool call rejected: no available tool is named ${names}. Copy a name exactly as declared in the tools schema and call it again.`;
+/** The remote-device picker; walled off on device-locked runs. */
+const REMOTE_DEVICE_IDENTIFIER = 'lobe-remote-device';
 const UNRESOLVED_TOOL_REASON = 'tool_name_unresolved';
 /**
  * How many times one operation may answer unresolvable tool calls with a
@@ -820,9 +823,24 @@ export class GeneralChatAgent implements Agent {
             );
           }
 
+          // A picker call on a locked run is not a typo: the tool was withheld on
+          // purpose, and "copy the name exactly" sends the model into a retry
+          // loop that ends the operation. Say why and who can switch instead.
+          const lockedPickerNote =
+            state.plan?.execution &&
+            namedToolCalls.some(
+              (toolCall) =>
+                toolCall.function.name.split(PLUGIN_SCHEMA_SEPARATOR)[0] ===
+                REMOTE_DEVICE_IDENTIFIER,
+            )
+              ? describeLockedDevicePicker(state.plan.execution)
+              : undefined;
+
           return {
             payload: {
-              blockedContent: unresolvedToolContent(unresolvedNames),
+              blockedContent: lockedPickerNote
+                ? `Tool call rejected: ${unresolvedNames} is not available in this run. ${lockedPickerNote}`
+                : unresolvedToolContent(unresolvedNames),
               blockedReason: UNRESOLVED_TOOL_REASON,
               parentMessageId,
               unresolvedToolNames: true,
