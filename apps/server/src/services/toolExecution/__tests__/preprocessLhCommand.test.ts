@@ -39,6 +39,7 @@ const wrap = (command: string, extraEnv = '') =>
     '__LOBEHUB_LH_SHIM__',
     '(',
     `trap 'jobs -p > "$__lobehub_lh_bin"/.jobs; if [ -s "$__lobehub_lh_bin"/.jobs ]; then (n=0; while read -r p; do while [ "$n" -lt 300 ] && kill -0 "$p" 2>/dev/null; do case "$(cat /proc/"$p"/stat 2>/dev/null)" in *") Z "*) break ;; esac; sleep 1; n=$((n + 1)); done; done < "$__lobehub_lh_bin"/.jobs; rm -rf "$__lobehub_lh_bin") >/dev/null 2>&1 </dev/null & fi' EXIT`,
+    'lh() { "$__lobehub_lh_bin"/lh "$@"; }',
     command,
     ')',
   ].join('\n');
@@ -204,6 +205,12 @@ describe('preprocessLhCommand in a real shell', () => {
     ],
   ])('authenticates an lh reached through %s', async (_label, command) => {
     expect(await run(command)).toBe('cli jwt=mock-jwt-token\n');
+  });
+
+  // Regression: an inline `PATH=` assignment replaces the lookup path for that
+  // one `lh`, skipping the exported wrapper directory.
+  it('authenticates an lh whose inline PATH assignment puts another lh first', async () => {
+    expect(await run(`PATH=${fakeBin}:"$PATH" lh whoami`)).toBe('cli jwt=mock-jwt-token\n');
   });
 
   // Regression: the sandbox session outlives the command, so a wrapper left on

@@ -241,6 +241,9 @@ export const preprocessLhCommand = async (
       // cleanup.
       '(',
       `trap 'jobs -p > ${dir}/.jobs; if [ -s ${dir}/.jobs ]; then ${lhWrapperWatcher(dir)} fi' EXIT`,
+      // Functions resolve before PATH, so an inline `PATH=… lh` still reaches
+      // the wrapper; everything run as a program finds it on PATH instead.
+      `lh() { ${dir}/lh "$@"; }`,
       command,
       ')',
     ].join('\n');
