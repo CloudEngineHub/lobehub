@@ -1332,7 +1332,14 @@ export class GatewayActionImpl {
     // useGatewayReconnect doesn't fire for a stale previous operation while the new
     // gateway connection is being established. Also disconnect any live reconnect
     // connection that was already established for the old operation.
-    if (result.topicId) {
+    //
+    // Not for an approval that continues a group member: the server runs it
+    // under the supervisor's run (the result carries the member as its agent),
+    // so the supervisor keeps the topic, and its open stream is what delivers
+    // the members' continuation and its own closing.
+    const continuesGroupMember =
+      !!executionContext.groupId && !!result.agentId && result.agentId !== executionContext.agentId;
+    if (result.topicId && !continuesGroupMember) {
       const existingTopic = topicSelectors.getTopicById(result.topicId)(this.#get());
       const staleOpId = existingTopic?.metadata?.runningOperation?.operationId;
       if (staleOpId && staleOpId !== result.operationId) {
