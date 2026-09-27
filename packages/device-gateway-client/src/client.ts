@@ -46,11 +46,13 @@ const METRICS_ACK_TIMEOUT_MS = 15_000;
  */
 const REPLACED_CLOSE_REASON = 'Replaced by new connection';
 /**
- * A socket this client abandoned itself (watchdog, forced reconnect) can reach
- * the gateway after its successor and knock that one off with the same reason.
- * A takeover this soon after our own abandon is that race, not another process.
+ * Only a socket abandoned mid-handshake can reach the gateway after its
+ * successor and knock that one off with the same reason: an opened socket was
+ * registered before the successor existed, so it can never replace it. The
+ * handshake is bounded by `CONNECT_TIMEOUT`, so past that an in-flight upgrade
+ * is gone and any takeover is another client.
  */
-const SELF_REPLACE_WINDOW_MS = CONNECT_TIMEOUT * 2;
+const SELF_REPLACE_WINDOW_MS = CONNECT_TIMEOUT;
 
 // ─── Logger Interface ───
 
@@ -129,7 +131,8 @@ export class GatewayClient extends EventEmitter {
     { reject: (error: Error) => void; resolve: () => void }
   >();
   private intentionalDisconnect = false;
-  private lastSocketAbandonedAt = 0;
+  /** When a socket was last abandoned while its handshake was still in flight. */
+  private lastInFlightAbandonAt = 0;
   private deviceId: string;
   private connectionId: string;
   private channel?: string;
@@ -506,7 +509,7 @@ export class GatewayClient extends EventEmitter {
     if (
       !this.intentionalDisconnect &&
       reason.toString() === REPLACED_CLOSE_REASON &&
-      Date.now() - this.lastSocketAbandonedAt > SELF_REPLACE_WINDOW_MS
+      Date.now() - this.lastInFlightAbandonAt > SELF_REPLACE_WINDOW_MS
     ) {
       // Another client holding our connectionId just took over. Reconnecting
       // would knock it off in turn: the two would trade the connection every
@@ -658,7 +661,7 @@ export class GatewayClient extends EventEmitter {
       return;
     }
     const ws = this.ws;
-    this.lastSocketAbandonedAt = Date.now();
+    if (ws.readyState === WebSocket.CONNECTING) this.lastInFlightAbandonAt = Date.now();
     const suppressCloseError = (error: Error) => {
       this.logger.debug(`Ignoring WebSocket error during close: ${error.message}`);
     };

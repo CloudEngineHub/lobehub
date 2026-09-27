@@ -766,7 +766,7 @@ describe('GatewayClient', () => {
       replacedClient.disconnect();
     });
 
-    it('still reconnects when the takeover is its own abandoned socket', async () => {
+    const abandonThenReplace = async (abandonMidHandshake: boolean) => {
       const racingClient = new GatewayClient({
         autoReconnect: true,
         gatewayUrl: 'https://gateway.test.com',
@@ -775,19 +775,28 @@ describe('GatewayClient', () => {
       const replacedCb = vi.fn();
       racingClient.on('replaced', replacedCb);
 
+      mockWsShouldHang = abandonMidHandshake;
       racingClient.connect();
       await vi.advanceTimersByTimeAsync(1);
-      // Abandon the socket ourselves (watchdog path) and let the retry open.
+      // Abandon the socket ourselves (watchdog path), then let the retry open.
       (racingClient as any).forceReconnect('stalled');
+      mockWsShouldHang = false;
       await vi.advanceTimersByTimeAsync(1_001);
 
-      // The abandoned socket reaches the gateway late and knocks the new one off.
       (racingClient as any).handleClose(1000, Buffer.from('Replaced by new connection'));
-
-      expect(replacedCb).not.toHaveBeenCalled();
-      expect(racingClient.connectionStatus).toBe('reconnecting');
-
+      const status = racingClient.connectionStatus;
       racingClient.disconnect();
+      return { replaced: replacedCb.mock.calls.length > 0, status };
+    };
+
+    it('still reconnects when its own mid-handshake socket arrives late', async () => {
+      // The abandoned upgrade reaches the gateway after the retry and knocks it off.
+      expect(await abandonThenReplace(true)).toEqual({ replaced: false, status: 'reconnecting' });
+    });
+
+    it('treats a takeover after abandoning an opened socket as another client', async () => {
+      // An opened socket was registered before the retry, so it cannot replace it.
+      expect(await abandonThenReplace(false)).toEqual({ replaced: true, status: 'disconnected' });
     });
 
     it('should emit disconnected when autoReconnect is false and ws closes', async () => {
