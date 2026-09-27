@@ -162,11 +162,17 @@ export class SkillParser {
     const lines = content.replaceAll(/<!--[\s\S]*?-->/g, '').split(/\r?\n/);
     let name: string | undefined;
     let description: string | undefined;
+    // Text before the H1 (a language selector, badges line, …) is only a
+    // fallback: keep scanning so the H1 and the block after it still win.
+    let preamble: string | undefined;
     let block: string[] = [];
     let inFence = false;
 
     const flushBlock = () => {
-      if (block.length > 0 && !description) description = block.join(' ');
+      if (block.length > 0) {
+        if (name) description ??= block.join(' ');
+        else preamble ??= block.join(' ');
+      }
       block = [];
     };
 
@@ -206,6 +212,7 @@ export class SkillParser {
       if (text) block.push(text);
     }
     flushBlock();
+    description ??= preamble;
 
     if (description && description.length > DERIVED_DESCRIPTION_MAX_LENGTH) {
       description = description.slice(0, DERIVED_DESCRIPTION_MAX_LENGTH - 1).trimEnd() + '…';

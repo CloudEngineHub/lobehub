@@ -242,6 +242,16 @@ Some paragraph that must not become the description.`;
       );
     });
 
+    it('should still take the H1 and its summary when a preamble line precedes the title', () => {
+      const result = parser.parseSkillMd(
+        '[English](README.md) | [中文](README.zh.md)\n\n# Stock Watcher\n\nWatches A-share prices and alerts on moves.\n',
+        { fallbackName: 'openclaw-skills-a-stock-watcher' },
+      );
+
+      expect(result.manifest.name).toBe('Stock Watcher');
+      expect(result.manifest.description).toBe('Watches A-share prices and alerts on moves.');
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),
