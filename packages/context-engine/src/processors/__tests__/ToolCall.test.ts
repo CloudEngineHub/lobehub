@@ -357,6 +357,25 @@ describe('ToolCallProcessor', () => {
       expect(result.messages[0].content).toBe(PENDING_TOOL_RESULT_CONTENT);
     });
 
+    it('should keep the running note when the turn switched to a model without tool calling', async () => {
+      const processor = new ToolCallProcessor({ ...defaultConfig, isCanUseFC: () => false });
+      const pending = {
+        content: '',
+        id: 'msg-tool-1',
+        plugin: { apiName: 'callSubAgent', identifier: 'lobe-agent', type: 'builtin' },
+        pluginState: { status: 'pending' },
+        role: 'tool',
+        tool_call_id: 'call_1',
+      };
+
+      const result = await processor.process(createContext([pending]));
+
+      expect(result.messages[0]).toMatchObject({
+        content: PENDING_TOOL_RESULT_CONTENT,
+        role: 'user',
+      });
+    });
+
     it('should keep the real result once a deferred tool has been backfilled', async () => {
       const processor = new ToolCallProcessor(defaultConfig);
       const done = {

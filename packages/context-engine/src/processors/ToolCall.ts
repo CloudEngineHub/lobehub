@@ -161,10 +161,15 @@ export class ToolCallProcessor extends BaseProcessor {
    * Process tool message
    */
   private processToolMessage(message: any, supportTools: boolean): any {
+    const content = this.isPendingToolResult(message)
+      ? PENDING_TOOL_RESULT_CONTENT
+      : message.content;
+
     if (!supportTools) {
       // If tools not supported, convert tool message to user message
       return {
         ...message,
+        content,
         name: undefined,
         plugin: undefined,
         role: 'user',
@@ -185,7 +190,7 @@ export class ToolCallProcessor extends BaseProcessor {
 
     return {
       ...message,
-      content: this.isPendingToolResult(message) ? PENDING_TOOL_RESULT_CONTENT : message.content,
+      content,
       name: toolName,
       // Keep tool_call_id for association
     };
