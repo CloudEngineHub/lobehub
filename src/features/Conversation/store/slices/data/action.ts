@@ -299,7 +299,15 @@ export const dataSlice: StateCreator<
           // updatedAt tie-breaker handles most cases on its own, but the
           // updatedAt comparison degenerates when server's pushed snapshot
           // carries a DB updatedAt equal to a later stale fetch's row.
-          if (operationSelectors.isAgentRuntimeRunningByContext(context)(getChatStoreState()))
+          //
+          // The first load is exempt: there is no streamed content to protect
+          // yet, and a run that stays `running` for a long time (a group
+          // supervisor parked on a member's approval) would otherwise leave the
+          // list on its skeleton for good.
+          if (
+            get().messagesInit &&
+            operationSelectors.isAgentRuntimeRunningByContext(context)(getChatStoreState())
+          )
             return;
 
           const prevDbMessages = get().dbMessages;

@@ -10,6 +10,7 @@ import {
   runMessageListQuery,
 } from '@/services/message/cache';
 import { useChatStore } from '@/store/chat';
+import { operationSelectors } from '@/store/chat/selectors';
 import { LOCAL_MESSAGE_SCOPE } from '@/store/chat/utils/localMessages';
 
 import { createStore } from '../../index';
@@ -669,6 +670,56 @@ describe('DataSlice', () => {
 
       await waitFor(() => {
         expect(onMessagesChange).toHaveBeenCalledWith(mockMessages, context, { source: 'fetch' });
+      });
+    });
+
+    describe('while an agent run is in flight in this conversation', () => {
+      const context = { agentId: 'test-session', threadId: null, topicId: 'test-topic' };
+      const fetched: UIChatMessage[] = [
+        {
+          content: 'Run the script',
+          createdAt: 1000,
+          id: 'msg-user',
+          role: 'user',
+          updatedAt: 1000,
+        },
+      ];
+
+      it('still lands the first load, so a parked run does not leave a skeleton (G-05)', async () => {
+        // A group supervisor parked on a member's approval stays `running`
+        // indefinitely; dropping the first load there never initializes the list.
+        const running = vi
+          .spyOn(operationSelectors, 'isAgentRuntimeRunningByContext')
+          .mockReturnValue(() => true);
+        vi.mocked(messageService.getMessages).mockResolvedValue(fetched);
+        const store = createStore({ context });
+        store.setState({ messagesInit: false });
+
+        store.getState().useFetchMessages(context);
+
+        await waitFor(() => {
+          expect(store.getState().messagesInit).toBe(true);
+        });
+        expect(store.getState().dbMessages.map((m) => m.id)).toEqual(['msg-user']);
+        running.mockRestore();
+      });
+
+      it('keeps dropping refetches once the list is loaded', async () => {
+        const running = vi
+          .spyOn(operationSelectors, 'isAgentRuntimeRunningByContext')
+          .mockReturnValue(() => true);
+        vi.mocked(messageService.getMessages).mockResolvedValue(fetched);
+        const store = createStore({ context });
+        store.setState({ dbMessages: [], messagesInit: true });
+
+        store.getState().useFetchMessages(context);
+
+        await waitFor(() => {
+          expect(messageService.getMessages).toHaveBeenCalled();
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(store.getState().dbMessages).toEqual([]);
+        running.mockRestore();
       });
     });
 
