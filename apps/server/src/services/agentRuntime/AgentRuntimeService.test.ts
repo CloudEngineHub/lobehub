@@ -3058,6 +3058,30 @@ describe('AgentRuntimeService', () => {
       resumeSpy = vi.spyOn(service, 'tryResumeParentFromAsyncTool').mockResolvedValue(true);
     });
 
+    // G-05 follow-through: a member that inherits manual approval parks on
+    // `waiting_for_human`; that is a pause, not an answer, so the supervisor
+    // must stay parked until the approval continuation reports back.
+    it.each(['in_group', 'isolated'] as const)(
+      'holds the supervisor while a %s member waits for approval',
+      async (mode) => {
+        const won = await service.completeGroupActionMember({
+          anchorMessageId: 'grp-tool-1',
+          expectedMembers: 1,
+          finalState: { ...memberState, status: 'waiting_for_human' } as any,
+          groupToolMessageId: 'grp-tool-1',
+          mode,
+          onComplete: 'resume',
+          operationId: 'child-1',
+          parentOperationId: 'parent-1',
+          reason: 'waiting_for_human',
+        });
+
+        expect(won).toBe(false);
+        expect(updateToolMessage).not.toHaveBeenCalled();
+        expect(resumeSpy).not.toHaveBeenCalled();
+      },
+    );
+
     it('single in-group member: backfills a receipt onto the group tool and resumes', async () => {
       const won = await service.completeGroupActionMember({
         anchorMessageId: 'grp-tool-1',

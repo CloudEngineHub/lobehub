@@ -58,6 +58,7 @@ import { createGroupActionMemberBridgeHook } from './hooks/threadRunHooks';
 import { InterventionController } from './intervention/InterventionController';
 import type { ApprovalClaimState } from './pipeline/approvalResume';
 import { claimApprovalResume, tryReuseInterventionContinuation } from './pipeline/approvalResume';
+import { resolveGroupMemberApprovalContinuation } from './pipeline/groupMemberApproval';
 import { dispatchHeteroAgent } from './pipeline/heteroDispatch';
 import { buildOperationInitRequest, runOperationInit } from './pipeline/operationInit';
 import { createHistoryMessagesLoader } from './pipeline/operationPrep';
@@ -520,6 +521,27 @@ export class AiAgentService {
    *   → AgentRuntimeService.createOperation(...)
    */
   async execAgent(inputParams: InternalExecAgentParams): Promise<ExecAgentResult> {
+    // An approval on a group member's tool continues that member, not the
+    // conversation's supervisor (see `resolveGroupMemberApprovalContinuation`).
+    const memberContinuation = await resolveGroupMemberApprovalContinuation(
+      {
+        createBridgeHook: (bridge) =>
+          createGroupActionMemberBridgeHook(this.agentRuntimeService, bridge),
+        findMessagePlugin: (messageId) => this.messageModel.findMessagePlugin(messageId),
+        loadState: (operationId) =>
+          this.agentRuntimeService.loadInterventionContinuationState(operationId),
+      },
+      inputParams,
+    );
+    if (memberContinuation) {
+      log(
+        'execAgent: approval targets group member %s, continuing it under supervisor op %s',
+        memberContinuation.agentId,
+        memberContinuation.parentOperationId,
+      );
+      return this.execAgent(memberContinuation);
+    }
+
     // Creating the thread here (rather than inside the turn) means a run that
     // asked for one is already a thread run by the time the reservation check
     // below reads `appContext.threadId` — same isolation as a follow-up inside
