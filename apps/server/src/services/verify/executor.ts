@@ -281,7 +281,7 @@ export class VerifyExecutorService {
         completedAt: new Date(),
         confidence: 0,
         status: 'failed',
-        suggestion: `Capture and upload the missing evidence (${missing}) via \`lh verify upload-evidence\`.`,
+        suggestion: `Capture and upload the missing evidence (${missing}) via \`lh acceptance run result submit --item <checkItemId> --type <type> --file <path>\`.`,
         toulmin: { limitation: `Required evidence not provided: ${missing}.` },
         verdict: 'uncertain',
       });
