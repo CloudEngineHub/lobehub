@@ -53,6 +53,7 @@ import {
 } from '@/business/server/agent-run/agentInterventionIdentity';
 import { AgentOperationModel } from '@/database/models/agentOperation';
 import { MessageModel } from '@/database/models/message';
+import { TopicModel } from '@/database/models/topic';
 import { UserModel } from '@/database/models/user';
 import { type LobeChatDatabase } from '@/database/type';
 import { appEnv } from '@/envs/app';
@@ -649,14 +650,66 @@ export class AgentRuntimeService {
     // shows — the step-boundary check then persists the interrupted state.
     await this.coordinator.markInterrupted(operationId);
 
-    await this.coordinator.saveAgentState(operationId, {
+    const interruptedState: AgentState = {
       ...state,
       lastModified: new Date().toISOString(),
       status: 'interrupted',
-    });
+    };
+    await this.coordinator.saveAgentState(operationId, interruptedState);
 
     log('[%s] Operation interrupted', operationId);
+
+    // A run parked on `waiting_for_async_tool` (a supervisor waiting on its
+    // group members, a parent waiting on a sub-agent) has no step loop left to
+    // observe the sentinel, so settle it here: persist `interrupted` and fire
+    // its lifecycle hooks, then drop its topic marker. Doing this BEFORE the
+    // cascade below makes the children's completion bridges lose the resume
+    // CAS instead of waking the stopped parent.
+    if (state.status === 'waiting_for_async_tool') {
+      await this.settleInterruptedParkedOperation(operationId, interruptedState);
+    }
+
+    await this.interruptChildOperations(operationId);
+
     return true;
+  }
+
+  private async settleInterruptedParkedOperation(
+    operationId: string,
+    interruptedState: AgentState,
+  ): Promise<void> {
+    try {
+      await this.completionLifecycle.dispatchHooks(operationId, interruptedState, 'interrupted');
+
+      const topicId = interruptedState.metadata?.topicId;
+      if (typeof topicId === 'string') {
+        await new TopicModel(this.serverDB, this.userId, this.workspaceId).settleRunningOperation(
+          topicId,
+          operationId,
+          'active',
+        );
+      }
+    } catch (error) {
+      log('[%s] Failed to settle the interrupted parked operation: %O', operationId, error);
+    }
+  }
+
+  /**
+   * Stop cascades down the operation tree: group members (in_group and
+   * isolated) and `callSubAgent` children would otherwise keep calling the
+   * model and writing to the conversation after the user stopped the turn.
+   * Best-effort — the parent's own interrupt already succeeded.
+   */
+  private async interruptChildOperations(operationId: string): Promise<void> {
+    try {
+      const childIds = await this.agentOperationModel.findInFlightChildOperationIds(operationId);
+      for (const childId of childIds) {
+        log('[%s] Cascading interrupt to child operation %s', operationId, childId);
+        await this.interruptOperation(childId);
+      }
+    } catch (error) {
+      log('[%s] Failed to cascade interrupt to child operations: %O', operationId, error);
+    }
   }
 
   /**

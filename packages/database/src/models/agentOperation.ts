@@ -673,6 +673,31 @@ export class AgentOperationModel {
   }
 
   /**
+   * Ids of the operations forked from `parentOperationId` (group members,
+   * `callSubAgent` children) that have not settled yet. A stop on the parent
+   * cascades to these so a forked run does not keep writing after the user
+   * stopped the turn. Owner-scoped.
+   */
+  async findInFlightChildOperationIds(parentOperationId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: agentOperations.id })
+      .from(agentOperations)
+      .where(
+        and(
+          this.ownership(),
+          eq(agentOperations.parentOperationId, parentOperationId),
+          inArray(agentOperations.status, [
+            'idle',
+            'running',
+            'waiting_for_async_tool',
+            'waiting_for_human',
+          ]),
+        ),
+      );
+    return rows.map((row) => row.id);
+  }
+
+  /**
    * Longest single operation (agent run) wall-clock execution time over the last
    * year, in seconds. Wall clock (`completedAt - startedAt`) is the most faithful
    * "task duration" — it spans the whole run including tool calls and waiting,
