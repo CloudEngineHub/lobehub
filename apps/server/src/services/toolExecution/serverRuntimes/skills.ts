@@ -63,11 +63,13 @@ const withoutReplay = <T extends { error?: unknown; success: boolean }>(result: 
   result.success ? result : { ...result, error: { ...toRecord(result.error), kind: 'stop' } };
 
 /**
- * A prepare the gateway gave up on (`TIMEOUT` body), or our own HTTP deadline
- * when the gateway never answered.
+ * A prepare the gateway gave up on (its `{"error":"TIMEOUT"}` body), or our own
+ * HTTP deadline when the gateway never answered. Deliberately narrow: a device
+ * whose archive download itself failed (e.g. `504 Gateway Timeout` from the
+ * CDN) has finished, and must not be told the work is still continuing.
  */
 const isPrepareTimeout = (error?: string) =>
-  !!error && /\bTIMEOUT\b|timed out|aborted due to timeout/i.test(error);
+  !!error && (/"error"\s*:\s*"TIMEOUT"/.test(error) || /aborted due to timeout/i.test(error));
 
 interface UserSettingsWithMarketToken {
   market?: {

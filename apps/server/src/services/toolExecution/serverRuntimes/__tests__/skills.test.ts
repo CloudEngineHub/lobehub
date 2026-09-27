@@ -899,6 +899,32 @@ describe('skillsRuntime', () => {
       },
     );
 
+    it('keeps reporting a finished download failure that merely mentions a timeout', async () => {
+      mocks.prepareSkillDirectory.mockResolvedValue({
+        error: 'Failed to download skill package: 504 Gateway Timeout',
+        success: false,
+      });
+
+      const { skillsRuntime } = await import('../skills');
+      const runtime = await skillsRuntime.factory({
+        activeDeviceId: 'device-1',
+        serverDB: {} as never,
+        toolManifestMap: {},
+        topicId: 'topic-1',
+        userId: 'user-1',
+      });
+
+      const result = await runtime.execScript({
+        activatedSkills: [{ id: 'user-skill-id', name: 'user-skill' }],
+        command: 'python scripts/run.py',
+        description: 'Run skill script',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.content).toContain('Failed to download skill package: 504 Gateway Timeout');
+      expect(result.content).not.toContain('did not finish in time');
+    });
+
     it('runs without a skill dir (workingDirectory cwd) when no archive exists', async () => {
       mocks.executeToolCall.mockResolvedValue({
         content: 'ok',
