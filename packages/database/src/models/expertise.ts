@@ -6,7 +6,7 @@ import type {
   ExpertiseLessonSection,
   ExpertiseReasonKind,
 } from '@lobechat/types';
-import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, type SQL, sql } from 'drizzle-orm';
 
 import {
   agents,
@@ -105,7 +105,7 @@ export class ExpertiseModel {
   /** The caller's always-on domains only — the scope an acceptance without a project falls back to. */
   listDomainsForOwner = async () => this.listDomainsBoundTo();
 
-  private listDomainsBoundTo = async (carrierWhere?: ReturnType<typeof eq>) => {
+  private listDomainsBoundTo = async (carrierWhere?: SQL) => {
     const ownerWhere = this.workspaceId
       ? eq(expertiseBindings.boundWorkspaceId, this.workspaceId)
       : eq(expertiseBindings.boundUserId, this.userId);
@@ -199,7 +199,9 @@ export class ExpertiseModel {
    * re-rank them by hit count.
    */
   listRules = async () => {
-    const bound = await this.listDomainsForOwner();
+    // The reviewer's own groups plus the ones distilled from a project's acceptances, which are
+    // bound to that project only. Agent-bound domains are self-learning, not rules, and stay out.
+    const bound = await this.listDomainsBoundTo(isNotNull(expertiseBindings.projectId));
     const domainIds = bound.map(({ domain }) => domain.id);
     if (domainIds.length === 0) return [];
 

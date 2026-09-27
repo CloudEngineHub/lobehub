@@ -11,6 +11,7 @@ import {
   expertiseInsights,
   expertiseLessons,
   expertiseRuns,
+  projects,
   topics,
   users,
   verifyCheckResults,
@@ -418,6 +419,48 @@ describe('ExpertiseModel', () => {
       '0d3e1a5c-6f52-4c2e-8f2a-9f2d3f26b104',
     ]);
     expect(group.rules[2].enforcement).toBe('remind');
+  });
+
+  it('lists groups distilled from a project, but not agent self-learning domains', async () => {
+    await seedRuleGroup();
+    await serverDB.insert(agents).values({ id: 'rules-agent', userId });
+    await serverDB.insert(projects).values({
+      coordinatorAgentId: 'rules-agent',
+      id: 'rules-project',
+      identifier: 'LOBE',
+      name: 'lobehub',
+      userId,
+    });
+    await serverDB.insert(expertiseDomains).values([
+      {
+        anchorChosenAt: new Date(),
+        domainFilter: '项目里的打回',
+        id: 'project-domain',
+        slug: 'project-domain',
+        title: 'lobehub 的规矩',
+        userId,
+      },
+      {
+        anchorChosenAt: new Date(),
+        domainFilter: '智能体专长',
+        id: 'agent-domain',
+        slug: 'agent-domain',
+        title: '智能体专长',
+        userId,
+      },
+    ]);
+    await serverDB.insert(expertiseBindings).values([
+      { domainId: 'project-domain', projectId: 'rules-project' },
+      { agentId: 'rules-agent', domainId: 'agent-domain' },
+    ]);
+
+    const groups = await new ExpertiseModel(serverDB, userId).listRules();
+
+    expect(groups.map((g) => g.domain.title)).toContain('lobehub 的规矩');
+    expect(groups.map((g) => g.domain.title)).not.toContain('智能体专长');
+    expect(groups.find((g) => g.domain.id === 'project-domain')?.scopes).toEqual([
+      { id: 'rules-project', kind: 'project', title: 'lobehub' },
+    ]);
   });
 
   it('files a hand-written rule at the top of its group with the next code', async () => {
