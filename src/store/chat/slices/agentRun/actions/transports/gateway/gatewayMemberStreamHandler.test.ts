@@ -107,13 +107,32 @@ describe('createGatewayMemberStreamHandler', () => {
       return { ensureGroupHydrated, handler, refreshGroup, store };
     };
 
-    it('re-reads the group tree so the approval card lands live (G-05)', () => {
+    it('re-reads the group tree so the approval card lands live (G-05)', async () => {
       const { handler, refreshGroup, store } = setup();
 
       handler(makeEvent('agent_runtime_end', { reason: 'waiting_for_human' }));
+      await vi.waitFor(() => expect(refreshGroup).toHaveBeenCalledTimes(1));
 
-      expect(refreshGroup).toHaveBeenCalledTimes(1);
       expect(store.completeOperation).toHaveBeenCalledWith('local-member-op');
+    });
+
+    // Codex P1 on #20093: both reads replace the whole bucket, so the refresh
+    // must not race an in-flight stream_start hydration that could land last.
+    it('waits for the in-flight hydration before refreshing', async () => {
+      const { ensureGroupHydrated, handler, refreshGroup } = setup();
+      let finishHydration!: () => void;
+      ensureGroupHydrated.mockReturnValue(
+        new Promise<void>((resolve) => {
+          finishHydration = resolve;
+        }),
+      );
+
+      handler(makeEvent('agent_runtime_end', { reason: 'waiting_for_human' }));
+      await Promise.resolve();
+      expect(refreshGroup).not.toHaveBeenCalled();
+
+      finishHydration();
+      await vi.waitFor(() => expect(refreshGroup).toHaveBeenCalledTimes(1));
     });
 
     it('leaves a normal member end to the supervisor terminal refetch', () => {

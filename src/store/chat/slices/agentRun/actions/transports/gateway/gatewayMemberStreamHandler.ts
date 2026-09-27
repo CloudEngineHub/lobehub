@@ -189,7 +189,10 @@ export const createGatewayMemberStreamHandler = (
           event.type === 'agent_runtime_end' &&
           (event.data as { reason?: string } | undefined)?.reason === 'waiting_for_human'
         ) {
-          void refreshGroup();
+          // Chained after the stream_start hydration: both reads replace the
+          // whole bucket, so an older in-flight snapshot landing last would
+          // drop the pending row again.
+          void ensureGroupHydrated().then(() => refreshGroup());
         }
         if (localOperationId) get().completeOperation(localOperationId);
         break;
