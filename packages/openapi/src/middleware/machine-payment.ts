@@ -38,6 +38,10 @@ export interface MachinePaymentConfig {
    * the payment method's job (e.g. `tempo.charge()` only protects when given a
    * `store`). Without it, one credential settles on every request that repeats
    * it.
+   *
+   * A custom method's `verify` must reject with an mppx `PaymentError` (e.g.
+   * `Errors.VerificationFailedError`) to answer 402; any other throw becomes a
+   * 500 `InternalPaymentError`.
    */
   mppx: MachinePaymentMppx;
   /**

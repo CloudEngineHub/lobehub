@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 
 import { Hono, type MiddlewareHandler } from 'hono';
-import { Challenge, Credential, Method, Store, z } from 'mppx';
+import { Challenge, Credential, Errors, Method, Store, z } from 'mppx';
 import { Mppx } from 'mppx/server';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -53,10 +53,16 @@ const createTestMethod = (settlements: Settlement[]) => {
 
       // A zero-amount challenge is the metered free tier: the caller proves who
       // it is, but no value moves. Anything else must carry a real payment.
+      //
+      // Rejections must be typed `PaymentError`s: mppx answers them with a fresh
+      // 402 challenge, but maps any other throw to a 500 InternalPaymentError.
       const expectedType = request.amount === '0' ? 'proof' : 'payment';
-      if (payload.type !== expectedType) throw new Error(`expected a "${expectedType}" credential`);
+      if (payload.type !== expectedType)
+        throw new Errors.VerificationFailedError({
+          reason: `expected a "${expectedType}" credential`,
+        });
       if (payload.signature !== sign(credential.challenge.id, payload.type))
-        throw new Error('invalid payment proof');
+        throw new Errors.VerificationFailedError({ reason: 'invalid payment proof' });
 
       // Replay protection belongs to the method, not the protocol: mppx core
       // re-verifies a credential happily, and only the method knows what
@@ -67,7 +73,7 @@ const createTestMethod = (settlements: Settlement[]) => {
         ? Date.parse(credential.challenge.expires)
         : Date.now() + 60_000;
       if (!(await Store.tryClaim(store, `test:${credential.challenge.id}`, expires)))
-        throw new Error('credential has already been used');
+        throw new Errors.VerificationFailedError({ reason: 'credential has already been used' });
 
       settlements.push({ amount: request.amount, type: payload.type });
 
