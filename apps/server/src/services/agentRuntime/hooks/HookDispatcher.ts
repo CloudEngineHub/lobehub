@@ -50,6 +50,14 @@ export async function deliverWebhook(
   const directBase = process.env.INTERNAL_APP_URL || process.env.APP_URL || '';
   const base = delivery === 'qstash' ? relayBase : directBase;
   const resolvedUrl = url.startsWith('http') ? url : urlJoin(base, url);
+  // The fetch fallbacks fire from this process itself, so they resolve against
+  // the direct base — not the relay's URL. A deployment that sets
+  // INTERNAL_APP_URL precisely because the server cannot reach its own public
+  // address would fail the fallback exactly when QStash is unavailable, the one
+  // moment the fallback exists for.
+  const fallbackUrl = url.startsWith('http')
+    ? url
+    : urlJoin(delivery === 'qstash' ? directBase : relayBase, url);
 
   if (delivery === 'qstash') {
     try {
@@ -59,7 +67,7 @@ export async function deliverWebhook(
           throw new Error(`QSTASH_TOKEN not available for qstash-only webhook: ${url}`);
         }
         log('QStash token not available, falling back to fetch delivery');
-        await fetchDeliver(resolvedUrl, payload);
+        await fetchDeliver(fallbackUrl, payload);
         return;
       }
       const client = new OtelQstashClient({ token: qstashToken });
@@ -80,7 +88,7 @@ export async function deliverWebhook(
       if (fallback === 'none') throw error;
 
       log('QStash delivery failed, falling back to fetch: %O', error);
-      await fetchDeliver(resolvedUrl, payload);
+      await fetchDeliver(fallbackUrl, payload);
     }
   } else {
     await fetchDeliver(resolvedUrl, payload);
