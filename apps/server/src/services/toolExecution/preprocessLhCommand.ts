@@ -91,6 +91,25 @@ const LH_SHIM_DIR_VAR = '__lobehub_lh_bin';
 const LH_SHIM_EOF = '__LOBEHUB_LH_SHIM__';
 const LH_STATUS_VAR = '__lobehub_lh_status';
 
+/**
+ * Longest the watcher keeps the wrapper for background jobs: the lifetime of
+ * the token it carries (`signUserJWT`'s default), after which it is inert.
+ */
+const LH_WRAPPER_MAX_SECONDS = 5 * 60;
+
+/**
+ * Detached watcher: removes the wrapper once every listed job has exited, or
+ * after {@link LH_WRAPPER_MAX_SECONDS}. A finished job counts as exited even
+ * while it lingers as a zombie — the Market sandbox's PID 1 (a Python server)
+ * never reaps orphans, so `kill -0` alone would keep the watcher, and with it
+ * the `runCommand`, alive forever.
+ */
+const lhWrapperWatcher = (dir: string) =>
+  `(n=0; while read -r p; do ` +
+  `while [ "$n" -lt ${LH_WRAPPER_MAX_SECONDS} ] && kill -0 "$p" 2>/dev/null; do ` +
+  `case "$(cat /proc/"$p"/stat 2>/dev/null)" in *") Z "*) break ;; esac; ` +
+  `sleep 1; n=$((n + 1)); done; done < ${dir}/.jobs; rm -rf ${dir}) >/dev/null 2>&1 </dev/null &`;
+
 /** POSIX single-quoting, safe for any value including quotes and newlines. */
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", String.raw`'\''`)}'`;
 
@@ -128,11 +147,13 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", St
  * The sandbox session outlives the command, so the wrapper must not: the EXIT
  * trap deletes it once the script ends, and the command runs in a subshell so
  * its own `trap` or `exit` cannot skip that cleanup. A later command in the
- * same sandbox finds no token on disk. Before the cleanup the subshell waits
- * for the jobs the command left in the background, so `nohup lh … &` or
- * `(sleep 5; lh …) &` still find the wrapper; the Market runner already waits
- * for those before returning, so this adds no latency there. A job detached
- * further (`( lh … & )`, `disown`) is not waited on and may lose the race.
+ * same sandbox finds no token on disk. Jobs the command left in the background
+ * (`nohup lh … &`, `(sleep 5; lh …) &`) may exec `lh` after the script ends, so
+ * when there are any, a detached watcher removes the wrapper only once they
+ * have all exited — without making the command itself wait for them. A job
+ * detached further (`( lh … & )`, `disown`) is not tracked and may lose the
+ * race. If the wrapper cannot be written, the script exits before the command
+ * runs rather than letting `lh` fall through to an unauthenticated one.
  *
  * `LOBEHUB_WORKSPACE_ID` is what keeps a workspace run's CLI calls in the
  * workspace: without it the CLI resolves to personal scope and a workspace
@@ -194,7 +215,8 @@ export const preprocessLhCommand = async (
     const finalCommand = [
       [
         `${LH_SHIM_DIR_VAR}=$(mktemp -d)`,
-        `trap 'rm -rf ${dir}' EXIT`,
+        // Skipped when a watcher (below) owns the removal.
+        `trap '[ -s ${dir}/.jobs ] || rm -rf ${dir}' EXIT`,
         // A trapped signal would otherwise resume the script; exiting runs the
         // EXIT cleanup above.
         `trap 'exit 129' HUP`,
@@ -203,17 +225,25 @@ export const preprocessLhCommand = async (
         `cat > ${dir}/lh <<'${LH_SHIM_EOF}'`,
         `chmod 700 ${dir}/lh`,
         `export PATH=${dir}:"$PATH"`,
-      ].join(' && '),
+      ].join(' && ') +
+        // Without the wrapper an `lh` would silently run unauthenticated, so
+        // stop before any of the command runs.
+        ` || { echo 'lh: could not set up LobeHub CLI credentials' >&2; exit 1; }`,
       '#!/bin/sh',
       `${envAssignments} exec npx -y @lobehub/cli "$@"`,
       LH_SHIM_EOF,
       // A subshell, so the command's own `trap … EXIT` or `exit` cannot skip the
-      // cleanup; it waits for background jobs that may still exec `lh`, then
-      // exits with the command's own status.
+      // cleanup, and it exits with the command's own status. Jobs it left in
+      // the background may still exec `lh`, so instead of joining them (which
+      // would block on a long-lived server) a detached watcher removes the
+      // wrapper once they have all exited.
       '(',
       command,
       `${LH_STATUS_VAR}=$?`,
-      'wait',
+      `jobs -p > ${dir}/.jobs`,
+      `if [ -s ${dir}/.jobs ]; then`,
+      `  ${lhWrapperWatcher(dir)}`,
+      'fi',
       `exit "$${LH_STATUS_VAR}"`,
       ')',
     ].join('\n');

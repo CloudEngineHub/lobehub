@@ -33,14 +33,17 @@ const CREDS = "LOBEHUB_JWT='mock-jwt-token' LOBEHUB_SERVER='https://app.lobehub.
  */
 const wrap = (command: string, extraEnv = '') =>
   [
-    `__lobehub_lh_bin=$(mktemp -d) && trap 'rm -rf "$__lobehub_lh_bin"' EXIT && trap 'exit 129' HUP && trap 'exit 130' INT && trap 'exit 143' TERM && cat > "$__lobehub_lh_bin"/lh <<'__LOBEHUB_LH_SHIM__' && chmod 700 "$__lobehub_lh_bin"/lh && export PATH="$__lobehub_lh_bin":"$PATH"`,
+    `__lobehub_lh_bin=$(mktemp -d) && trap '[ -s "$__lobehub_lh_bin"/.jobs ] || rm -rf "$__lobehub_lh_bin"' EXIT && trap 'exit 129' HUP && trap 'exit 130' INT && trap 'exit 143' TERM && cat > "$__lobehub_lh_bin"/lh <<'__LOBEHUB_LH_SHIM__' && chmod 700 "$__lobehub_lh_bin"/lh && export PATH="$__lobehub_lh_bin":"$PATH" || { echo 'lh: could not set up LobeHub CLI credentials' >&2; exit 1; }`,
     '#!/bin/sh',
     `${CREDS}${extraEnv} exec npx -y @lobehub/cli "$@"`,
     '__LOBEHUB_LH_SHIM__',
     '(',
     command,
     '__lobehub_lh_status=$?',
-    'wait',
+    'jobs -p > "$__lobehub_lh_bin"/.jobs',
+    'if [ -s "$__lobehub_lh_bin"/.jobs ]; then',
+    `  (n=0; while read -r p; do while [ "$n" -lt 300 ] && kill -0 "$p" 2>/dev/null; do case "$(cat /proc/"$p"/stat 2>/dev/null)" in *") Z "*) break ;; esac; sleep 1; n=$((n + 1)); done; done < "$__lobehub_lh_bin"/.jobs; rm -rf "$__lobehub_lh_bin") >/dev/null 2>&1 </dev/null &`,
+    'fi',
     'exit "$__lobehub_lh_status"',
     ')',
   ].join('\n');
@@ -237,11 +240,48 @@ describe('preprocessLhCommand in a real shell', () => {
     expect(readFileSync(out, 'utf8')).toBe('cli jwt=mock-jwt-token\n');
   });
 
-  it('removes the wrapper once the background job has finished', async () => {
-    const dir = await run(`(sleep 1; lh whoami >/dev/null) & printf %s "$__lobehub_lh_bin"`);
+  // Regression: joining every background job blocked the command on an
+  // unrelated long-lived process such as a dev server.
+  it('returns without waiting for a long-running background job, then removes the wrapper', async () => {
+    const startedAt = Date.now();
+    const dir = await run(
+      `lh whoami >/dev/null; sleep 3 >/dev/null 2>&1 & printf %s "$__lobehub_lh_bin"`,
+    );
 
-    expect(dir).not.toBe('');
-    expect(existsSync(dir)).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(existsSync(`${dir}/lh`)).toBe(true);
+
+    await vi.waitFor(() => expect(existsSync(dir)).toBe(false), { interval: 200, timeout: 6000 });
+  });
+
+  // Regression: a failed setup fell through to the command, whose `lh` then ran
+  // the unauthenticated global binary.
+  it('stops before the command when the wrapper cannot be written', async () => {
+    const failBin = mkdtempSync(path.join(tmpdir(), 'lh-shim-fail-'));
+    writeFileSync(path.join(failBin, 'mktemp'), '#!/bin/sh\nexit 1\n');
+    chmodSync(path.join(failBin, 'mktemp'), 0o755);
+    const { command: prepared } = await preprocessLhCommand('echo ran; lh whoami', 'user-1');
+
+    let error: { status: number; stderr: string; stdout: string } | undefined;
+    try {
+      execFileSync('/bin/sh', ['-c', prepared], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          LOBEHUB_JWT: undefined,
+          PATH: `${failBin}:${fakeBin}:${process.env.PATH}`,
+        },
+        stdio: 'pipe',
+      });
+    } catch (error_) {
+      error = error_ as typeof error;
+    } finally {
+      rmSync(failBin, { force: true, recursive: true });
+    }
+
+    expect(error).toMatchObject({ status: 1 });
+    expect(error!.stderr).toContain('could not set up LobeHub CLI credentials');
+    expect(error!.stdout).not.toContain('ran');
   });
 
   it('keeps the token out of the script environment', async () => {
