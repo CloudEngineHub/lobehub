@@ -159,7 +159,8 @@ describe('preprocessLhCommand in a real shell', () => {
     const { command: prepared } = await preprocessLhCommand(command, 'user-1');
     return execFileSync('/bin/sh', ['-c', prepared], {
       encoding: 'utf8',
-      env: { HOME: tmpdir(), PATH: `${fakeBin}:${process.env.PATH}` },
+      // An inherited token would mask a shim that failed to reach the CLI.
+      env: { ...process.env, LOBEHUB_JWT: undefined, PATH: `${fakeBin}:${process.env.PATH}` },
     });
   };
 
