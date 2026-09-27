@@ -252,6 +252,15 @@ Some paragraph that must not become the description.`;
       expect(result.manifest.description).toBe('Watches A-share prices and alerts on moves.');
     });
 
+    it('should skip linked badge lines after the title', () => {
+      const result = parser.parseSkillMd(
+        '# Stock Watcher\n\n[![Build](https://img.shields.io/badge/ci-passing-green.svg)](https://ci.example.com) [![npm](https://img.shields.io/npm/v/x.svg)](https://npm.im/x)\n\nWatches A-share prices and alerts on moves.\n',
+      );
+
+      expect(result.manifest.name).toBe('Stock Watcher');
+      expect(result.manifest.description).toBe('Watches A-share prices and alerts on moves.');
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),

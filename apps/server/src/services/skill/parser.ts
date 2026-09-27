@@ -204,8 +204,13 @@ export class SkillParser {
         continue;
       }
 
-      // Skip HTML comments / tags, horizontal rules and images
-      if (/^(?:<[!/a-z]|-{3,}$|\*{3,}$|_{3,}$|!\[)/i.test(line)) continue;
+      // Skip HTML comments / tags and horizontal rules
+      if (/^(?:<[!/a-z]|-{3,}$|\*{3,}$|_{3,}$)/i.test(line)) continue;
+      // Skip decoration-only lines: images and linked badges (`[![CI](…)](…)`)
+      const withoutImages = line
+        .replaceAll(/\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)/g, '')
+        .replaceAll(/!\[[^\]]*\]\([^)]*\)/g, '');
+      if (!withoutImages.replaceAll(/[\s|]/g, '')) continue;
 
       // Strip blockquote / list markers so the description is plain text
       const text = line.replace(/^(?:>\s*)+/, '').replace(/^(?:[*+-]|\d+\.)\s+/, '');
