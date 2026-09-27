@@ -2504,7 +2504,7 @@ describe('GatewayActionImpl', () => {
         internalPinTopicStatus.mockClear();
 
         onSessionComplete({ succeeded: true, terminalReceived: true });
-        await vi.waitFor(() => expect(refreshTopic).toHaveBeenCalled());
+        await vi.waitFor(() => expect(refreshTopic).toHaveBeenCalledWith('agent_agent-1'));
 
         expect(internalPinTopicStatus.mock.calls.map(([params]) => params.status)).toEqual([
           'active',

@@ -1954,7 +1954,14 @@ export class GatewayActionImpl {
 
         const state = this.#get();
         state.internal_pinTopicStatus?.({ ...target, status: 'running' });
-        void state.refreshTopic?.();
+        // Revalidate the run's own bucket — the user may have switched agents
+        // since — so that row receives the newer run's reconnect marker.
+        return state.refreshTopic?.(
+          topicMapKey({
+            agentId: target.agentId ?? state.activeAgentId,
+            groupId: target.groupId ?? state.activeGroupId,
+          }),
+        );
       })
       .catch(console.error);
   };
