@@ -520,6 +520,30 @@ describe('ExpertiseModel', () => {
     expect(revisions[0]).toMatchObject({ changedBy: 'user', kind: 'user-feedback', revision: 2 });
   });
 
+  it('numbers revisions from the row, not from a stale read', async () => {
+    const { first } = await seedRuleGroup();
+    const model = new ExpertiseModel(serverDB, userId);
+    await model.updateRule(first, { title: '第二版' });
+    await model.updateRule(first, { title: '第三版' });
+
+    // Another request read the rule back when it was still at revision 1.
+    const stale = { ...(await model.findLesson(first))!, currentRevision: 1 };
+    model.findLesson = async () => stale;
+
+    // A switch flip does not write the stale number back...
+    await model.updateRule(first, { enforcement: 'block' });
+    const [afterSwitch] = await serverDB
+      .select({ rev: expertiseLessons.currentRevision })
+      .from(expertiseLessons)
+      .where(eq(expertiseLessons.id, first));
+    expect(afterSwitch.rev).toBe(3);
+
+    // ...and a wording edit takes the next free number instead of colliding with revision 2.
+    await expect(model.updateRule(first, { title: '第四版' })).resolves.toMatchObject({
+      revision: 4,
+    });
+  });
+
   it("moves one rule within its group from the server's own order", async () => {
     const { first, second } = await seedRuleGroup();
     const model = new ExpertiseModel(serverDB, userId);
@@ -808,11 +832,44 @@ describe('ExpertiseModel', () => {
       },
     ]);
 
+    // Hits whose round is not linked: one from the teammate's run, one from the viewer's own.
+    const teammateRun = 'b3f9b0c6-6d0e-4f2e-9b1a-2c4d5e6f7a09';
+    await serverDB.insert(expertiseRuns).values({
+      actorId: 'agent-2',
+      actorType: 'agent',
+      domainId: 'shared-domain',
+      id: teammateRun,
+      runIndex: 2,
+      subjectId: 'z',
+      subjectType: 'standalone',
+      userId: teammate,
+      workspaceId,
+    });
+    await serverDB.insert(expertiseHits).values([
+      {
+        domainId: 'shared-domain',
+        example: '队友私下的原话',
+        lessonId: lesson,
+        outcome: 'violation',
+        runId: teammateRun,
+      },
+      {
+        domainId: 'shared-domain',
+        example: '我自己的原话',
+        lessonId: lesson,
+        outcome: 'violation',
+        runId,
+      },
+    ]);
+
     const sources = await new ExpertiseModel(serverDB, userId, workspaceId).listLessonSources(
       lesson,
     );
 
-    expect(sources.map(({ checkTitle }) => checkTitle)).toEqual(['公开轮次的检查项']);
+    expect(sources.map(({ checkTitle }) => checkTitle)).toContain('公开轮次的检查项');
+    expect(sources.map(({ checkTitle }) => checkTitle)).not.toContain('私有轮次的检查项');
+    expect(sources.map(({ example }) => example)).toContain('我自己的原话');
+    expect(sources.map(({ example }) => example)).not.toContain('队友私下的原话');
   });
 
   it('reuses a group the reviewer already has instead of opening a second one', async () => {

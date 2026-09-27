@@ -264,10 +264,11 @@ const RuleDocument = ({
     }
   };
 
-  const commitTitle = () => {
+  const commitTitle = async () => {
     const next = titleDraft.trim();
-    onTitleEditing(false);
-    if (next && next !== rule.title) void save({ title: next });
+    if (!next || next === rule.title) return onTitleEditing(false);
+    // Leave edit mode only once the rename is saved; on failure the draft stays to retry.
+    if (await save({ title: next })) onTitleEditing(false);
   };
 
   const addException = () => {
@@ -301,10 +302,10 @@ const RuleDocument = ({
                 autoFocus
                 className={styles.titleInput}
                 value={titleDraft}
-                onBlur={commitTitle}
+                onBlur={() => void commitTitle()}
                 onChange={(e) => setTitleDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') commitTitle();
+                  if (e.key === 'Enter') void commitTitle();
                   if (e.key === 'Escape') onTitleEditing(false);
                 }}
               />

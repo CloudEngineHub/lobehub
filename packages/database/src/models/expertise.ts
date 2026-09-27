@@ -331,6 +331,7 @@ export class ExpertiseModel {
       })
       .from(expertiseHits)
       .innerJoin(expertiseDomains, eq(expertiseDomains.id, expertiseHits.domainId))
+      .innerJoin(expertiseRuns, eq(expertiseRuns.id, expertiseHits.runId))
       .leftJoin(verifyCheckResults, eq(verifyCheckResults.id, expertiseHits.sourceCheckResultId))
       .leftJoin(verifyRuns, eq(verifyRuns.id, verifyCheckResults.verifyRunId))
       .where(
@@ -341,9 +342,11 @@ export class ExpertiseModel {
           // a teammate's private round would otherwise show that round's check, the reviewer's
           // words and a link to it. Same predicate the consolidation reader applies.
           or(
-            isNull(verifyCheckResults.id),
             eq(verifyCheckResults.userId, this.userId),
             eq(verifyRuns.visibility, 'public'),
+            // No linked round (never mapped, or the round was deleted): nothing says the viewer
+            // may see where it came from, so only their own runs' evidence is shown.
+            and(isNull(verifyCheckResults.id), eq(expertiseRuns.userId, this.userId)),
           ),
         ),
       )
@@ -994,7 +997,7 @@ export class ExpertiseModel {
     }
 
     const versioned = titleChanged || sectionsChanged;
-    const revision = versioned ? lesson.currentRevision + 1 : lesson.currentRevision;
+    let revision = lesson.currentRevision;
     const feedback = titleChanged
       ? title!
       : (Object.values(patch.sections ?? {})
@@ -1003,6 +1006,14 @@ export class ExpertiseModel {
 
     await this.db.transaction(async (tx) => {
       if (versioned) {
+        // Take the next number under a row lock: two edits racing on a stale read would
+        // otherwise both claim it and trip the (lesson, revision) unique key.
+        const [locked] = await tx
+          .select({ currentRevision: expertiseLessons.currentRevision })
+          .from(expertiseLessons)
+          .where(eq(expertiseLessons.id, lessonId))
+          .for('update');
+        revision = (locked?.currentRevision ?? lesson.currentRevision) + 1;
         await tx.insert(expertiseLessonRevisions).values({
           changedBy: 'user',
           changedByUserId: this.userId,
@@ -1022,7 +1033,8 @@ export class ExpertiseModel {
           ...(patch.reasonKind && { reasonKind: patch.reasonKind }),
           ...(titleChanged && { title }),
           ...(sectionsChanged && { sections }),
-          currentRevision: revision,
+          // A switch flip is not a revision and must not write back a number it read earlier.
+          ...(versioned && { currentRevision: revision }),
           updatedAt: new Date(),
         })
         .where(eq(expertiseLessons.id, lessonId));
@@ -1031,9 +1043,9 @@ export class ExpertiseModel {
   };
 
   /**
-   * Writes back the order the reviewer dragged one group into. Only rules of that group are
-   * touched; an id from elsewhere is ignored rather than pulled across, because moving between
-   * groups changes the code and goes through `moveRule`.
+   * Applies one drag inside a group. Only that group's active rules are renumbered; a rule from
+   * elsewhere is refused rather than pulled across, because moving between groups changes the
+   * code and goes through `moveRule`.
    */
   reorderRule = async (domainId: string, lessonId: string, beforeId: string | null) => {
     const domain = await this.findDomain(domainId);
