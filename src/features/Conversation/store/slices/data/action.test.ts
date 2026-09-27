@@ -704,13 +704,54 @@ describe('DataSlice', () => {
         running.mockRestore();
       });
 
-      it('keeps dropping refetches once the list is loaded', async () => {
+      it('keeps loaded rows but lands rows the list has never seen (G-05)', async () => {
+        // A stale cached first load can miss the parked member's rows; the fresh
+        // read that follows must still bring them in, without touching the
+        // rows the stream owns.
+        const running = vi
+          .spyOn(operationSelectors, 'isAgentRuntimeRunningByContext')
+          .mockReturnValue(() => true);
+        const streamed = {
+          content: 'streamed so far',
+          createdAt: 2000,
+          id: 'msg-supervisor',
+          role: 'assistant',
+          updatedAt: 2000,
+        } as UIChatMessage;
+        const memberTool = {
+          content: '',
+          createdAt: 3000,
+          id: 'msg-member-tool',
+          role: 'tool',
+          updatedAt: 3000,
+        } as UIChatMessage;
+        vi.mocked(messageService.getMessages).mockResolvedValue([
+          ...fetched,
+          { ...streamed, content: '' },
+          memberTool,
+        ]);
+        const store = createStore({ context });
+        store.setState({ dbMessages: [...fetched, streamed], messagesInit: true });
+
+        store.getState().useFetchMessages(context);
+
+        await waitFor(() => {
+          expect(store.getState().dbMessages.map((m) => m.id)).toContain('msg-member-tool');
+        });
+        expect(store.getState().dbMessages.find((m) => m.id === 'msg-supervisor')?.content).toBe(
+          'streamed so far',
+        );
+        running.mockRestore();
+      });
+
+      it('drops a refetch that brings nothing new', async () => {
         const running = vi
           .spyOn(operationSelectors, 'isAgentRuntimeRunningByContext')
           .mockReturnValue(() => true);
         vi.mocked(messageService.getMessages).mockResolvedValue(fetched);
         const store = createStore({ context });
-        store.setState({ dbMessages: [], messagesInit: true });
+        const loaded = [{ ...fetched[0], content: 'local' }];
+        store.setState({ dbMessages: loaded, messagesInit: true });
 
         store.getState().useFetchMessages(context);
 
@@ -718,7 +759,7 @@ describe('DataSlice', () => {
           expect(messageService.getMessages).toHaveBeenCalled();
         });
         await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(store.getState().dbMessages).toEqual([]);
+        expect(store.getState().dbMessages).toBe(loaded);
         running.mockRestore();
       });
     });
