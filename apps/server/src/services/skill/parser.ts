@@ -6,6 +6,7 @@ import {
   type SkillManifest,
   skillManifestSchema,
 } from '@lobechat/types';
+import { decodeHTML } from 'entities';
 import { unzip as fflateUnzip, zip as fflateZip } from 'fflate';
 import matter from 'gray-matter';
 import { sha256 } from 'js-sha256';
@@ -42,36 +43,14 @@ export interface ParseZipOptions extends ParseSkillMdOptions {
   repackSkillZip?: boolean;
 }
 
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  apos: "'",
-  gt: '>',
-  lt: '<',
-  nbsp: ' ',
-  quot: '"',
-};
-
-/**
- * marked escapes inline text for HTML (`&` → `&amp;`, …) and keeps literal
- * entities from the source; the derived metadata is stored as plain text, so
- * decode them (numeric references plus the common named ones).
- */
-const decodeHtmlEntities = (text: string): string =>
-  text.replaceAll(/&(#\d+|#x[\da-f]+|[a-z]+);/gi, (match, entity: string) => {
-    if (entity[0] !== '#') return NAMED_ENTITIES[entity.toLowerCase()] ?? match;
-    const codePoint =
-      entity[1] === 'x' || entity[1] === 'X'
-        ? Number.parseInt(entity.slice(2), 16)
-        : Number.parseInt(entity.slice(1), 10);
-    return codePoint > 0 && codePoint <= 0x10_ffff ? String.fromCodePoint(codePoint) : match;
-  });
-
 /**
  * Visible plain text of inline Markdown tokens: link labels, emphasis and code
  * span contents are kept; images and inline HTML (comments, tags) are dropped.
  */
 const inlineToPlainText = (tokens: Token[] = []): string =>
-  decodeHtmlEntities(flattenInline(tokens)).replaceAll(/\s+/g, ' ').trim();
+  // marked escapes inline text for HTML (`&` → `&amp;`) and keeps source
+  // entities (`&copy;`); the metadata is stored as plain text, so decode all.
+  decodeHTML(flattenInline(tokens)).replaceAll(/\s+/g, ' ').trim();
 
 const flattenInline = (tokens: Token[]): string =>
   tokens

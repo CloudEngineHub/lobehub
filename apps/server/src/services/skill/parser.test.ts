@@ -329,11 +329,11 @@ Some paragraph that must not become the description.`;
 
     it('should decode HTML entities in the derived name and description', () => {
       const result = parser.parseSkillMd(
-        '# Research & Analysis\n\nFast & reliable <b>not</b> "quoted" &#169; &#x263A; &amp;.\n',
+        '# Research &copy; Analysis\n\nFast &mdash; reliable & <b>not</b> "quoted" &#169; &#x263A; &amp; &hellip;\n',
       );
 
-      expect(result.manifest.name).toBe('Research & Analysis');
-      expect(result.manifest.description).toBe('Fast & reliable not "quoted" © ☺ &.');
+      expect(result.manifest.name).toBe('Research © Analysis');
+      expect(result.manifest.description).toBe('Fast — reliable & not "quoted" © ☺ & …');
     });
 
     it('should never take a multi-line HTML comment body as the description', () => {
