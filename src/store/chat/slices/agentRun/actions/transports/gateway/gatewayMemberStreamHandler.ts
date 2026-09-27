@@ -290,6 +290,13 @@ export const createGatewayMemberStreamHandler = (
         // The member row's final structure (tools, content, metadata) is
         // reconciled by the supervisor op's terminal refetch / council barrier.
         // This handler owns only the live text, so just retire the loading op.
+        // A member parked on a human approval is the exception: the supervisor
+        // waits on it, so no terminal refetch comes, and the pending tool row
+        // (the approval card) only lands with a read of its own.
+        const reason = (event.data as { reason?: string } | undefined)?.reason;
+        if (reason === 'waiting_for_human' && canHydrateTarget()) {
+          void hydrate(targetContext, { force: true });
+        }
         finish();
         break;
       }

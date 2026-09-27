@@ -262,6 +262,41 @@ describe('createGatewayMemberStreamHandler', () => {
     });
   });
 
+  it('hydrates the pending tool row when the member parks on a human approval (G-05)', async () => {
+    const store = createStore({
+      [bucketKey]: [{ content: '', id: 'member-msg', role: 'assistant' }],
+    });
+    const hydrate = vi.fn().mockResolvedValue(undefined);
+    const handler = createGatewayMemberStreamHandler(() => store, handlerParams(hydrate));
+
+    handler(makeEvent('stream_start', { assistantMessage: { id: 'member-msg' } }));
+    await flush();
+    hydrate.mockClear();
+
+    handler(makeEvent('member_runtime_end', { reason: 'waiting_for_human' } as any, 1));
+
+    expect(hydrate).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'group-1' }), {
+      force: true,
+    });
+    expect(store.completeOperation).toHaveBeenCalledWith('local-member-op');
+  });
+
+  it('leaves a finished member to the supervisor terminal refetch', async () => {
+    const store = createStore({
+      [bucketKey]: [{ content: '', id: 'member-msg', role: 'assistant' }],
+    });
+    const hydrate = vi.fn().mockResolvedValue(undefined);
+    const handler = createGatewayMemberStreamHandler(() => store, handlerParams(hydrate));
+
+    handler(makeEvent('stream_start', { assistantMessage: { id: 'member-msg' } }));
+    await flush();
+    hydrate.mockClear();
+
+    handler(makeEvent('member_runtime_end', { reason: 'done' } as any, 1));
+
+    expect(hydrate).not.toHaveBeenCalled();
+  });
+
   it("re-hydrates when a later step's row is missing, then streams into it (G-20)", async () => {
     // Step 1's row was hydrated; step 2 (after the member's tool call) creates
     // a new assistant row the first hydration could not have seen.
