@@ -299,6 +299,35 @@ describe('gatherContextFacts', () => {
         mentionedAgents: [{ id: 'agt_9', title: 'Nine' }],
       });
     });
+
+    it('invites no delegation inside a sub-agent run, where callAgent is rejected', async () => {
+      const listRecentAgents = vi.fn(async () => recent);
+      const facts = await gatherContextFacts(
+        request({
+          enabledToolIds: ['lobe-agent-management'],
+          isSubAgent: true,
+          mentionedAgents: [{ id: 'agt_9', title: 'Nine' }] as never,
+        }),
+        {
+          listEnabledProviders: async () => [{ id: 'openai', models: [], name: 'OpenAI' }],
+          listRecentAgents,
+        },
+      );
+
+      const ctx = facts.step.agentManagementContext!;
+      expect(listRecentAgents).not.toHaveBeenCalled();
+      expect(ctx.availableAgents).toBeUndefined();
+      expect(ctx.mentionedAgents).toBeUndefined();
+      // CRUD facts for createAgent / updateAgent still flow.
+      expect(ctx.availableProviders).toEqual([{ id: 'openai', models: [], name: 'OpenAI' }]);
+    });
+
+    it('invites no delegation in an auto-mode sub-agent without the tool', async () => {
+      const facts = await gatherContextFacts(request({ isSubAgent: true }), {
+        listRecentAgents: async () => recent,
+      });
+      expect(facts.step.agentManagementContext).toBeUndefined();
+    });
   });
 
   it('lists LobeHub skill connectors in the official tool catalog with their status', () => {

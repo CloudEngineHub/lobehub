@@ -374,6 +374,10 @@ const gatherGroupAgentBuilderContext = async (
  * - nothing owner-scoped for a share visitor: the creator's other agents,
  *   providers and plugins are theirs, and the share gate has already removed
  *   the tool that could act on them.
+ * - no delegation facts (`availableAgents` / `mentionedAgents`) inside a
+ *   sub-agent run: the executor rejects nested `callAgent` there and the
+ *   manifest already hides it, so inviting delegation only sends the model
+ *   to a tool call that can never succeed.
  */
 const gatherAgentManagementContext = async (
   request: ContextFactRequest,
@@ -382,9 +386,10 @@ const gatherAgentManagementContext = async (
   const isVisitor = !!request.shareVisitor;
   const isEnabled = !isVisitor && request.enabledToolIds.includes(AgentManagementIdentifier);
   const isAutoSkillMode = !isVisitor && request.agent.chatConfig?.skillActivateMode !== 'manual';
+  const canDelegate = request.isSubAgent !== true;
   let context: AgentManagementContext | undefined;
 
-  if ((isAutoSkillMode || isEnabled) && providers.listRecentAgents) {
+  if (canDelegate && (isAutoSkillMode || isEnabled) && providers.listRecentAgents) {
     const { listRecentAgents } = providers;
     const recent =
       (await attempt('recentAgents', () => listRecentAgents(AVAILABLE_AGENTS_LIMIT + 2))) ?? [];
@@ -416,7 +421,7 @@ const gatherAgentManagementContext = async (
     };
   }
 
-  if (request.mentionedAgents?.length) {
+  if (canDelegate && request.mentionedAgents?.length) {
     context = { ...context, mentionedAgents: request.mentionedAgents };
   }
 
