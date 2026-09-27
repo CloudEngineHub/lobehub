@@ -47,6 +47,9 @@ const createDeps = (state: unknown) => {
     bridgeHook,
     deps: {
       createBridgeHook: vi.fn().mockReturnValue(bridgeHook),
+      createThreadHooks: vi
+        .fn()
+        .mockResolvedValue([{ handler: vi.fn(), id: 'thread-completion', type: 'onComplete' }]),
       findMessagePlugin: vi
         .fn()
         .mockResolvedValue({ intervention: { operationId: 'op_carol', status: 'pending' } }),
@@ -95,6 +98,29 @@ describe('resolveGroupMemberApprovalContinuation', () => {
       isSubAgent: true,
       threadId: 'thd_1',
     });
+  });
+
+  // Codex P1 on #20093: the continuation used to install only the bridge, so
+  // the isolation thread never ran its completion hook and stayed processing.
+  it("rebuilds an isolated member's thread lifecycle hooks before the bridge", async () => {
+    const { bridgeHook, deps } = createDeps({
+      ...memberState,
+      origin: { ...memberState.origin, threadId: 'thd_1' },
+    });
+
+    const result = await resolveGroupMemberApprovalContinuation(deps as any, approveParams);
+
+    expect(deps.createThreadHooks).toHaveBeenCalledWith('thd_1');
+    expect(result?.hooks?.map((hook) => hook.id)).toEqual(['thread-completion', bridgeHook.id]);
+  });
+
+  it('adds no thread hooks for an in_group member', async () => {
+    const { bridgeHook, deps } = createDeps(memberState);
+
+    const result = await resolveGroupMemberApprovalContinuation(deps as any, approveParams);
+
+    expect(deps.createThreadHooks).not.toHaveBeenCalled();
+    expect(result?.hooks).toEqual([bridgeHook]);
   });
 
   it('leaves a non-member approval untouched', async () => {

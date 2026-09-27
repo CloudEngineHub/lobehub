@@ -22,6 +22,12 @@ export interface GroupMemberBridgeParams {
 
 export interface GroupMemberApprovalDeps {
   createBridgeHook: (params: GroupMemberBridgeParams) => AgentHook;
+  /**
+   * Rebuild the isolation thread's lifecycle hooks (metadata + completion
+   * status) for a continued isolated member. Hooks are not carried over from
+   * the parked op, so without these the thread never leaves processing.
+   */
+  createThreadHooks: (threadId: string) => Promise<AgentHook[]>;
   findMessagePlugin: (messageId: string) => Promise<MessagePluginItem | undefined>;
   loadState: (operationId: string) => Promise<AgentState | null>;
 }
@@ -70,6 +76,9 @@ export const resolveGroupMemberApprovalContinuation = async (
   }
 
   const threadId = origin.threadId ?? undefined;
+  // Same order as the original isolated start: thread hooks first, bridge last
+  // so its tool-message backfill is the final write.
+  const threadHooks = threadId ? await deps.createThreadHooks(threadId) : [];
 
   return {
     ...params,
@@ -84,7 +93,7 @@ export const resolveGroupMemberApprovalContinuation = async (
       scope: 'group',
       topicId: origin.topicId ?? params.appContext?.topicId,
     },
-    hooks: [deps.createBridgeHook(bridge)],
+    hooks: [...threadHooks, deps.createBridgeHook(bridge)],
     parentOperationId: bridge.parentOperationId,
     slug: undefined,
     topicStartOwnerOperationId: bridge.parentOperationId,

@@ -54,7 +54,11 @@ import { MarketService } from '@/server/services/market';
 import { markdownToTxt } from '@/utils/markdownToTxt';
 
 import { createGraphAwareAgentFactory } from './helpers/agentFactory';
-import { createGroupActionMemberBridgeHook } from './hooks/threadRunHooks';
+import {
+  createGroupActionMemberBridgeHook,
+  createThreadHooks,
+  pickThreadUsageBaseline,
+} from './hooks/threadRunHooks';
 import { InterventionController } from './intervention/InterventionController';
 import type { ApprovalClaimState } from './pipeline/approvalResume';
 import { claimApprovalResume, tryReuseInterventionContinuation } from './pipeline/approvalResume';
@@ -521,6 +525,20 @@ export class AiAgentService {
       {
         createBridgeHook: (bridge) =>
           createGroupActionMemberBridgeHook(this.agentRuntimeService, bridge),
+        createThreadHooks: async (threadId) => {
+          const thread = await this.threadModel.findById(threadId);
+          if (!thread?.sourceMessageId) return [];
+          return createThreadHooks(
+            this.agentRuntimeService,
+            this.threadModel,
+            this.messageModel,
+            thread.id,
+            thread.metadata?.startedAt ?? new Date().toISOString(),
+            thread.sourceMessageId,
+            'execVirtualSubAgent',
+            pickThreadUsageBaseline(thread.metadata),
+          );
+        },
         findMessagePlugin: (messageId) => this.messageModel.findMessagePlugin(messageId),
         loadState: (operationId) =>
           this.agentRuntimeService.loadInterventionContinuationState(operationId),
