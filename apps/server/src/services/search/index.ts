@@ -40,28 +40,6 @@ export const DEFAULT_CRAWLER_IMPLS = ['jina', 'naive', 'search1api', 'browserles
  */
 export const DEFAULT_SEARCH_IMPLS = ['searxng'];
 
-/**
- * Zero-width characters (ZWSP/ZWNJ/ZWJ, word joiner, BOM) that ride along when a
- * value is copied from a web page or chat app. They are invisible in `env`
- * output but make `searxng` stop matching any provider id.
- */
-const INVISIBLE_CHARS = /[\u200B-\u200D\u2060\uFEFF]/g;
-
-/**
- * Wrapping quotes survive in the env value when Compose uses the list form
- * (`- SEARCH_PROVIDERS='searxng'`) or `docker run --env-file`, which do not
- * strip them the way a shell or dotenv would.
- */
-const WRAPPING_QUOTES = /^["'`]+|["'`]+$/g;
-
-const parseImplEnv = (envString: string = '') =>
-  envString
-    .replaceAll('，', ',')
-    .replaceAll(INVISIBLE_CHARS, '')
-    .split(',')
-    .map((item) => item.trim().replaceAll(WRAPPING_QUOTES, '').trim().toLowerCase())
-    .filter(Boolean);
-
 const KNOWN_SEARCH_IMPLS = new Set<string>(Object.values(SearchImplType));
 const warnedUnknownSearchImpls = new Set<string>();
 
@@ -161,7 +139,7 @@ export class SearchService {
   private userChannels?: UserChannelPreferences;
 
   private get crawlerOptions(): { impls: string[]; urlRuleImpls?: string[] } {
-    const enabledFromEnv = parseImplEnv(toolsEnv.CRAWLER_IMPLS);
+    const enabledFromEnv = toolsEnv.CRAWLER_IMPLS;
 
     // No user preference → preserve current behavior exactly: forward the env
     // list as-is (possibly empty, letting `Crawler` apply its own defaults).
@@ -215,11 +193,11 @@ export class SearchService {
     crawlerImpls: { id: string }[];
     searchProviders: { id: string }[];
   } {
-    const enabledProviders = toKnownSearchImpls(parseImplEnv(toolsEnv.SEARCH_PROVIDERS));
+    const enabledProviders = toKnownSearchImpls(toolsEnv.SEARCH_PROVIDERS);
     // Match the runtime default (single SearXNG provider) when unconfigured, so
     // the settings page never shows "no channels available" while search still works.
     const searchProviders = enabledProviders.length > 0 ? enabledProviders : DEFAULT_SEARCH_IMPLS;
-    const enabledCrawlers = parseImplEnv(toolsEnv.CRAWLER_IMPLS);
+    const enabledCrawlers = toolsEnv.CRAWLER_IMPLS;
     const crawlerImpls = enabledCrawlers.length > 0 ? enabledCrawlers : DEFAULT_CRAWLER_IMPLS;
 
     return {
@@ -315,7 +293,7 @@ export class SearchService {
   }
 
   private get searchImpls() {
-    const enabledFromEnv = toKnownSearchImpls(parseImplEnv(toolsEnv.SEARCH_PROVIDERS));
+    const enabledFromEnv = toKnownSearchImpls(toolsEnv.SEARCH_PROVIDERS);
 
     // No user preference → preserve current behavior exactly: forward the env
     // list as-is (possibly empty, letting the constructor apply its own default).
