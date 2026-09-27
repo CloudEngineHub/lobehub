@@ -1,4 +1,4 @@
-import { type AgentState } from '@lobechat/agent-runtime';
+import { type AgentState, selectUserInterventionConfig } from '@lobechat/agent-runtime';
 import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import { dispatchWorkRegistrationIntent } from '@lobechat/builtin-tools/workRegistration';
 import { getSubAgentChatConfigOverride, resolveSubAgentModel } from '@lobechat/const';
@@ -468,6 +468,7 @@ export const buildServerAgentMemberRunner = (
               supervisorMessageId: parentMessageId,
               timeout,
               topicId,
+              userInterventionConfig: selectUserInterventionConfig(state),
             });
             if (result?.started) {
               startedCount += 1;
