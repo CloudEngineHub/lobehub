@@ -415,18 +415,24 @@ export class SkillImporter {
       .replace(/^\//, '') // Remove leading slash
       .replace(/\.md$/i, '') // Remove .md extension
       .replaceAll('/', '.'); // Replace slashes with dots
-    const identifier = options?.identifier || `url.${url.host}.${pathPart || 'skill'}`;
+    const urlIdentifier = `url.${url.host}.${pathPart || 'skill'}`;
+    const identifier = options?.identifier || urlIdentifier;
     log('importFromUrl: identifier=%s', identifier);
 
     // 5. Check for existing skill
     let existing = await this.skillModel.findByIdentifier(identifier);
 
-    // Names are unique per scope, so the same skill already installed under a
-    // different identifier would fail the insert below with a raw DB error. That
-    // happens for market skills: the Skill Store UI and `lh skill install` key
-    // them by market identifier, while older agent-tool imports keyed them by
-    // the download URL. A same-name row fetched from the same URL is this skill;
-    // any other same-name row is a real conflict the caller must resolve.
+    // Older agent-tool imports keyed market skills by the URL-derived
+    // identifier. Look that row up too, so a skill whose manifest name changed
+    // since then is still updated in place rather than installed twice.
+    if (!existing && identifier !== urlIdentifier) {
+      existing = await this.skillModel.findByIdentifier(urlIdentifier);
+    }
+
+    // Names are unique per scope, so the same skill already installed under yet
+    // another identifier would fail the insert below with a raw DB error. A
+    // same-name row fetched from the same URL is this skill; any other
+    // same-name row is a real conflict the caller must resolve.
     if (!existing) {
       const sameName = await this.skillModel.findByName(manifest.name);
       if (sameName) {

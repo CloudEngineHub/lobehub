@@ -990,6 +990,35 @@ description: A nested skill
       expect(again.skill.identifier).toBe('openclaw-skills-memory-setup');
     });
 
+    it('updates a skill imported under the URL identifier even after its name changed', async () => {
+      const url = 'https://market.lobehub.com/api/v1/skills/openclaw-skills-memory-setup/download';
+      mockSsrfSafeFetch.mockResolvedValue({
+        arrayBuffer: async () => new ArrayBuffer(0),
+        ok: true,
+        status: 200,
+      });
+      mockParserInstance.parseZipPackage.mockResolvedValueOnce({
+        content: '# Memory Setup Skill',
+        manifest: { name: 'memory-setup', description: 'Configure persistent memory' },
+        resources: new Map(),
+      });
+      const legacy = await importer.importFromUrl({ url });
+
+      mockParserInstance.parseZipPackage.mockResolvedValueOnce({
+        content: '# Memory Setup Skill v2',
+        manifest: { name: 'memory-setup-v2', description: 'Configure persistent memory' },
+        resources: new Map(),
+      });
+      const again = await importer.importFromUrl(
+        { url },
+        { identifier: 'openclaw-skills-memory-setup', source: 'market' },
+      );
+
+      expect(again.status).toBe('updated');
+      expect(again.skill.id).toBe(legacy.skill.id);
+      expect(again.skill.name).toBe('memory-setup-v2');
+    });
+
     it('rejects a different skill with an installed name as a CONFLICT naming the installed one', async () => {
       mockSsrfSafeFetch.mockResolvedValue({
         arrayBuffer: async () => new ArrayBuffer(0),
