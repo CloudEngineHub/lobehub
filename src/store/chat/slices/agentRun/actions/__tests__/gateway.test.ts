@@ -2389,6 +2389,7 @@ describe('GatewayActionImpl', () => {
         const connectToGateway = vi.fn();
         const internalDispatchTopic = vi.fn();
         const internalPinTopicStatus = vi.fn();
+        const refreshTopic = vi.fn(async () => {});
         const state: Record<string, any> = {
           activeAgentId: 'agent-1',
           activeTopicId: 'topic-1',
@@ -2420,6 +2421,7 @@ describe('GatewayActionImpl', () => {
           moveQueuedMessages: vi.fn(),
           moveVoiceMessages: vi.fn(),
           onOperationCancel: vi.fn(),
+          refreshTopic,
           startOperation: vi.fn(() => ({ operationId: 'gw-op-1' })),
           updateTopicStatus: vi.fn(),
         })) as any;
@@ -2449,7 +2451,13 @@ describe('GatewayActionImpl', () => {
         });
         vi.mocked(topicService.settleRunningOperation).mockResolvedValue(undefined as never);
 
-        return { action, connectToGateway, internalDispatchTopic, internalPinTopicStatus };
+        return {
+          action,
+          connectToGateway,
+          internalDispatchTopic,
+          internalPinTopicStatus,
+          refreshTopic,
+        };
       };
 
       it('resets the local status to active when the watched run completes', async () => {
@@ -2475,6 +2483,58 @@ describe('GatewayActionImpl', () => {
         });
         // Nothing to clear: there was no marker in the local row.
         expect(internalDispatchTopic).not.toHaveBeenCalled();
+      });
+
+      // A run started from another tab or device replaces the server marker
+      // without appearing in this tab's operations; only the server can tell.
+      it('restores running when the server reports another run owns the topic', async () => {
+        const { action, connectToGateway, internalPinTopicStatus, refreshTopic } =
+          setupFollowUpRun();
+        vi.mocked(topicService.settleRunningOperation).mockResolvedValue({
+          activeOperationId: 'server-op-other-tab',
+          status: 'conflict',
+        } as never);
+
+        await action.executeGatewayAgent({
+          context: { agentId: 'agent-1', scope: 'main', threadId: null, topicId: 'topic-1' },
+          message: 'Follow-up',
+        });
+
+        const { onSessionComplete } = connectToGateway.mock.calls[0][0];
+        internalPinTopicStatus.mockClear();
+
+        onSessionComplete({ succeeded: true, terminalReceived: true });
+        await vi.waitFor(() => expect(refreshTopic).toHaveBeenCalled());
+
+        expect(internalPinTopicStatus.mock.calls.map(([params]) => params.status)).toEqual([
+          'active',
+          'running',
+        ]);
+      });
+
+      it('keeps the active status when the server settle does not conflict', async () => {
+        const { action, connectToGateway, internalPinTopicStatus, refreshTopic } =
+          setupFollowUpRun();
+        vi.mocked(topicService.settleRunningOperation).mockResolvedValue({
+          status: 'missing',
+        } as never);
+
+        await action.executeGatewayAgent({
+          context: { agentId: 'agent-1', scope: 'main', threadId: null, topicId: 'topic-1' },
+          message: 'Follow-up',
+        });
+
+        const { onSessionComplete } = connectToGateway.mock.calls[0][0];
+        internalPinTopicStatus.mockClear();
+
+        onSessionComplete({ succeeded: true, terminalReceived: true });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(internalPinTopicStatus.mock.calls.map(([params]) => params.status)).toEqual([
+          'active',
+        ]);
+        expect(refreshTopic).not.toHaveBeenCalled();
       });
 
       it('leaves the status alone when a newer local turn already started on the topic', async () => {
