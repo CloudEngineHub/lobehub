@@ -1,0 +1,143 @@
+[
+  {
+    "id": "msg_gkBwLXrWu8Ej",
+    "role": "user",
+    "content": "\\[B-03] 大家都说说看法\\[B-02m] 2",
+    "parentId": null,
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "trigger": "chat"
+    },
+    "createdAt": 1790490889997,
+    "updatedAt": 1790490889997
+  },
+  {
+    "id": "msg_ldCTldxqMmiY",
+    "role": "assistant",
+    "content": "",
+    "parentId": "msg_gkBwLXrWu8Ej",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "tool_calls",
+      "isSupervisor": true,
+      "orchestrationRole": "supervisor"
+    },
+    "tools": [
+      {
+        "id": "call_mujfy5qp_10",
+        "identifier": "lobe-group-management",
+        "apiName": "broadcast",
+        "arguments": "{\"agentIds\":[\"agt_OAw0WGYyFD9d\",\"agt_mxqPlrWSqMrn\"],\"instruction\":\"Both give an opinion.\"}",
+        "type": "builtin"
+      }
+    ],
+    "createdAt": 1790490890002,
+    "updatedAt": 1790490893020
+  },
+  {
+    "id": "msg_KGmAQBK8u3gymxnH37",
+    "role": "tool",
+    "content": "",
+    "parentId": "msg_ldCTldxqMmiY",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "agentCouncil": true
+    },
+    "tool_call_id": "call_mujfy5qp_10",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "broadcast",
+      "arguments": "{\"agentIds\":[\"agt_OAw0WGYyFD9d\",\"agt_mxqPlrWSqMrn\"],\"instruction\":\"Both give an opinion.\"}",
+      "type": "builtin"
+    },
+    "pluginState": {
+      "status": "completed"
+    },
+    "createdAt": 1790490893071,
+    "updatedAt": 1790490898764
+  },
+  {
+    "id": "msg_jH0fjhJ2PO9NyWV2kd",
+    "role": "tool",
+    "content": "",
+    "parentId": "msg_KGmAQBK8u3gymxnH37",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "tool_call_id": "call_mujfy5qp_10::m0",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "broadcast",
+      "arguments": "{\"agentIds\":[\"agt_OAw0WGYyFD9d\",\"agt_mxqPlrWSqMrn\"],\"instruction\":\"Both give an opinion.\"}",
+      "type": "builtin"
+    },
+    "pluginState": {
+      "status": "completed"
+    },
+    "createdAt": 1790490893077,
+    "updatedAt": 1790490898746
+  },
+  {
+    "id": "msg_83uXb1zJV896CLTaHl",
+    "role": "tool",
+    "content": "",
+    "parentId": "msg_KGmAQBK8u3gymxnH37",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "tool_call_id": "call_mujfy5qp_10::m1",
+    "plugin": {
+      "identifier": "lobe-group-management",
+      "apiName": "broadcast",
+      "arguments": "{\"agentIds\":[\"agt_OAw0WGYyFD9d\",\"agt_mxqPlrWSqMrn\"],\"instruction\":\"Both give an opinion.\"}",
+      "type": "builtin"
+    },
+    "pluginState": {
+      "status": "completed"
+    },
+    "createdAt": 1790490893081,
+    "updatedAt": 1790490898746
+  },
+  {
+    "id": "msg_2qyaALZPYRiNSO2oUt",
+    "role": "assistant",
+    "content": "CAROL B03 opinion alpha beta gamma delta epsilon zeta eta theta (req #11)",
+    "parentId": "msg_ldCTldxqMmiY",
+    "agentId": "agt_OAw0WGYyFD9d",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "stop",
+      "orchestrationRole": "member"
+    },
+    "createdAt": 1790490893109,
+    "updatedAt": 1790490897815
+  },
+  {
+    "id": "msg_TcE46AnKKjedn7hhF1",
+    "role": "assistant",
+    "content": "DAVE B03 opinion one two three four five six seven eight (req #12)",
+    "parentId": "msg_ldCTldxqMmiY",
+    "agentId": "agt_mxqPlrWSqMrn",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "stop",
+      "orchestrationRole": "member"
+    },
+    "createdAt": 1790490893111,
+    "updatedAt": 1790490897815
+  },
+  {
+    "id": "msg_cbyRdPFtzuyKsTKvum",
+    "role": "assistant",
+    "content": "SUP B03 DONE: summarised both.",
+    "parentId": "msg_KGmAQBK8u3gymxnH37",
+    "agentId": "agt_xwVSg4M64t3W",
+    "groupId": "cg_NbE0ZQ3gC0sU",
+    "metadata": {
+      "finishType": "stop"
+    },
+    "createdAt": 1790490900281,
+    "updatedAt": 1790490900559
+  }
+]

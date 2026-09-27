@@ -2,17 +2,9 @@ import type { AssistantContentBlock, ChatToolPayloadWithResult } from '@lobechat
 
 import type { Message, MessageGroupMetadata } from '../types';
 import type { BranchResolver } from './BranchResolver';
+import { isMemberBarrierAnchor, isSupervisorMessage } from './groupOrchestration';
 import type { MessageCollector } from './MessageCollector';
 import type { MessageTransformer } from './MessageTransformer';
-
-/**
- * Whether a message was authored by the group's supervisor agent.
- * Reads the canonical `metadata.orchestrationRole` snapshot, falling back to the
- * deprecated boolean `metadata.isSupervisor` for messages written before the
- * field existed.
- */
-const isSupervisorMessage = (message: Message | undefined): boolean =>
-  message?.metadata?.orchestrationRole === 'supervisor' || !!message?.metadata?.isSupervisor;
 
 /**
  * FlatListBuilder - Builds flat message list following the active path
@@ -186,6 +178,14 @@ export class FlatListBuilder {
 
       const message = this.messageMap.get(childId);
       if (!message) continue;
+
+      // Member barrier anchors are async-tool bookkeeping. Council turns used to
+      // be the only place they were swallowed; isolated fan-outs
+      // (executeAgentTasks) leaked them as orphan tool bubbles.
+      if (isMemberBarrierAnchor(message)) {
+        processedIds.add(message.id);
+        continue;
+      }
 
       // Internal dispatch envelopes remain in the context tree so the target
       // assistant keeps its parent chain, but they are not user-authored turns
@@ -716,7 +716,12 @@ export class FlatListBuilder {
       allMessages,
       processedIds,
     );
-    for (const anchorId of this.childrenMap.get(councilTool.id) ?? []) processedIds.add(anchorId);
+    // Only the barrier anchors are consumed here. The server runtime parents the
+    // supervisor's post-council reply under the council tool as well; that one
+    // is drained by `continueAfterAssistantGroup`.
+    for (const anchorId of this.childrenMap.get(councilTool.id) ?? []) {
+      if (isMemberBarrierAnchor(this.messageMap.get(anchorId))) processedIds.add(anchorId);
+    }
 
     return { memberIds, members: (councilVirtual as { members?: Message[] }).members ?? [] };
   }

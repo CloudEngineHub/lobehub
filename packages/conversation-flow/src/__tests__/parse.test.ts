@@ -1310,6 +1310,65 @@ describe('parse', () => {
       expect((supervisorSummary as any).children).toHaveLength(1);
       expect((supervisorSummary as any).children[0].content).toBe('调研完成！这是综合汇总报告...');
     });
+
+    // Server-runtime (gateway) shapes, captured from real group runs after a page
+    // refresh. The server parents member replies and supervisor follow-ups
+    // differently from the client orchestration, so every rendered id is checked
+    // through children / council blocks, not just top-level flatList entries.
+    describe('server runtime shapes', () => {
+      const collectRenderedIds = (messages: any[]): string[] =>
+        messages.flatMap((message) => [
+          message.id,
+          ...collectRenderedIds(message.children ?? []),
+          ...collectRenderedIds(message.council ?? []),
+          ...collectRenderedIds(message.members ?? []),
+        ]);
+
+      it('renders a single speak member reply parented to the supervisor assistant', () => {
+        const result = parse(inputs.agentGroup.serverSpeakSingleMember);
+
+        expect(result.flatList.map((m) => m.id)).toEqual([
+          'msg_x6yY9DHef4rG',
+          'msg_6BEquG7G5NDu',
+          'msg_RyQV4sNN2IPlAp27gs',
+          'msg_WhxyH60abdnzUJWkve',
+        ]);
+        expect(result.flatList.map((m) => m.role)).toEqual([
+          'user',
+          'supervisor',
+          'assistant',
+          'assistant',
+        ]);
+      });
+
+      it('renders the supervisor summary parented to the broadcast council tool', () => {
+        const result = parse(inputs.agentGroup.serverBroadcastSummary);
+
+        const renderedIds = collectRenderedIds(result.flatList);
+        // Both council members and the summary are visible.
+        expect(renderedIds).toEqual(
+          expect.arrayContaining([
+            'msg_2qyaALZPYRiNSO2oUt',
+            'msg_TcE46AnKKjedn7hhF1',
+            'msg_cbyRdPFtzuyKsTKvum',
+          ]),
+        );
+        expect(result.flatList.at(-1)?.id).toBe('msg_cbyRdPFtzuyKsTKvum');
+        // Barrier anchors stay hidden.
+        expect(renderedIds).not.toContain('msg_jH0fjhJ2PO9NyWV2kd');
+        expect(renderedIds).not.toContain('msg_83uXb1zJV896CLTaHl');
+      });
+
+      it('hides executeAgentTasks barrier anchors instead of rendering orphan tool rows', () => {
+        const result = parse(inputs.agentGroup.serverExecuteAgentTasks);
+
+        expect(result.flatList.map((m) => m.role)).toEqual(['user', 'supervisor']);
+        const renderedIds = collectRenderedIds(result.flatList);
+        expect(renderedIds).not.toContain('msg_r8VOzzkgNL15eKta9f');
+        expect(renderedIds).not.toContain('msg_vXYOMA4H7qKPdY4gE8');
+        expect(renderedIds).toContain('msg_qnepo51tVrQaT1M2R3');
+      });
+    });
   });
 
   describe('Tasks Aggregation', () => {
