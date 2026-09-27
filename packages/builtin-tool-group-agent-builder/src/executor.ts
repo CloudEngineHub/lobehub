@@ -15,9 +15,11 @@ import { BaseExecutor } from '@lobechat/types';
 
 import { agentService } from '@/services/agent';
 import { discoverService } from '@/services/discover';
+import { getAgentStoreState } from '@/store/agent';
 import { getChatGroupStoreState } from '@/store/agentGroup';
 import { useChatStore } from '@/store/chat';
 import { useGroupProfileStore } from '@/store/groupProfile';
+import { getHomeStoreState } from '@/store/home';
 
 import { AWAITING_CREATE_GROUP_RESULT, findSiblingCreateGroupCallIds } from './createGroupOrdering';
 import { GroupAgentBuilderExecutionRuntime } from './ExecutionRuntime';
@@ -53,6 +55,20 @@ const GROUP_WRITE_APIS = new Set<string>([
   GroupAgentBuilderApiName.updateAgentPrompt,
   GroupAgentBuilderApiName.updateGroup,
   GroupAgentBuilderApiName.updateGroupPrompt,
+]);
+
+// Inherited agent-config writes. They change one agent (the explicit `agentId`,
+// else the supervisor), so the agent config cache must refresh too.
+const AGENT_CONFIG_WRITE_APIS = new Set<string>([
+  GroupAgentBuilderApiName.installPlugin,
+  GroupAgentBuilderApiName.updateAgentConfig,
+]);
+
+// Writes that change what the sidebar / group switcher lists (new group, title,
+// avatar). Those read the home agent list, not the agentGroup list key.
+const HOME_LIST_WRITE_APIS = new Set<string>([
+  GroupAgentBuilderApiName.createGroup,
+  GroupAgentBuilderApiName.updateGroup,
 ]);
 
 /**
@@ -325,19 +341,31 @@ class GroupAgentBuilderExecutor extends BaseExecutor<typeof GroupAgentBuilderApi
     result,
     toolCallId,
   }: ToolAfterCallContext): Promise<void> => {
+    if (!result.success) return;
+
     const groupStore = getChatGroupStoreState();
+
+    if (HOME_LIST_WRITE_APIS.has(apiName)) await getHomeStoreState().fetchAgentList();
 
     // A brand-new group isn't in the list yet — refresh the list, not a detail.
     if (apiName === GroupAgentBuilderApiName.createGroup) {
-      if (result.success) await groupStore.refreshGroups();
+      await groupStore.refreshGroups();
       return;
     }
 
-    if (!result.success || !GROUP_WRITE_APIS.has(apiName)) return;
+    const isAgentConfigWrite = AGENT_CONFIG_WRITE_APIS.has(apiName);
+    if (!GROUP_WRITE_APIS.has(apiName) && !isAgentConfigWrite) return;
 
     const args = (params ?? {}) as { agentId?: string; groupId?: string; prompt?: string };
     const groupId =
       args.groupId ?? findGroupCreatedInConversation({ toolCallId }) ?? groupStore.activeGroupId;
+
+    if (isAgentConfigWrite) {
+      const agentId =
+        args.agentId ?? (groupId ? groupStore.groupMap[groupId]?.supervisorAgentId : undefined);
+      if (agentId) await getAgentStoreState().internal_refreshAgentConfig(agentId);
+    }
+
     if (!groupId) return;
 
     await groupStore.refreshGroupDetail(groupId);

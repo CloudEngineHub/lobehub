@@ -6,6 +6,8 @@ import { GroupAgentBuilderApiName, GroupAgentBuilderIdentifier } from './types';
 
 const {
   mockCreateAgent,
+  mockRefreshAgentConfig,
+  mockFetchAgentList,
   mockRefreshGroupDetail,
   mockRefreshGroups,
   mockSetAgentBuilderContent,
@@ -13,6 +15,8 @@ const {
   mockUpdateGroupPrompt,
 } = vi.hoisted(() => ({
   mockCreateAgent: vi.fn(),
+  mockRefreshAgentConfig: vi.fn(),
+  mockFetchAgentList: vi.fn(),
   mockRefreshGroupDetail: vi.fn(),
   mockRefreshGroups: vi.fn(),
   mockSetAgentBuilderContent: vi.fn(),
@@ -22,9 +26,18 @@ const {
 
 let activeGroupId: string | undefined = 'cg_1';
 
+vi.mock('@/store/agent', () => ({
+  getAgentStoreState: () => ({ internal_refreshAgentConfig: mockRefreshAgentConfig }),
+}));
+
+vi.mock('@/store/home', () => ({
+  getHomeStoreState: () => ({ fetchAgentList: mockFetchAgentList }),
+}));
+
 vi.mock('@/store/agentGroup', () => ({
   getChatGroupStoreState: () => ({
     activeGroupId,
+    groupMap: { cg_1: { supervisorAgentId: 'agt_supervisor' } },
     refreshGroupDetail: mockRefreshGroupDetail,
     refreshGroups: mockRefreshGroups,
   }),
@@ -330,6 +343,68 @@ describe('GroupAgentBuilderExecutor', () => {
 
       expect(mockRefreshGroups).toHaveBeenCalled();
       expect(mockRefreshGroupDetail).not.toHaveBeenCalled();
+    });
+
+    // G-21: the sidebar and the group switcher read the home agent list; the
+    // agentGroup list key has no live subscriber.
+    it('refreshes the home agent list after createGroup so the switcher lists it', async () => {
+      await afterCall(GroupAgentBuilderApiName.createGroup, { title: 'Launch' }, true);
+
+      expect(mockFetchAgentList).toHaveBeenCalled();
+    });
+
+    it('refreshes the home agent list after updateGroup renames the group', async () => {
+      await afterCall(GroupAgentBuilderApiName.updateGroup, { meta: { title: 'Renamed' } }, true);
+
+      expect(mockFetchAgentList).toHaveBeenCalled();
+      expect(mockRefreshGroupDetail).toHaveBeenCalledWith('cg_1');
+    });
+
+    it('does not refresh the home agent list when createGroup failed', async () => {
+      await afterCall(GroupAgentBuilderApiName.createGroup, { title: 'Launch' }, false);
+
+      expect(mockFetchAgentList).not.toHaveBeenCalled();
+      expect(mockRefreshGroups).not.toHaveBeenCalled();
+    });
+
+    // G-11: under gateway mode the config write commits server-side, so the
+    // client agent config cache only learns about it here.
+    it('refreshes the explicit target agent config after updateConfig', async () => {
+      await afterCall(
+        GroupAgentBuilderApiName.updateAgentConfig,
+        { agentId: 'agt_member', config: { model: 'gpt-4o-mini' } },
+        true,
+      );
+
+      expect(mockRefreshAgentConfig).toHaveBeenCalledWith('agt_member');
+      expect(mockRefreshGroupDetail).toHaveBeenCalledWith('cg_1');
+    });
+
+    it('refreshes the supervisor config after updateConfig without an agentId', async () => {
+      await afterCall(
+        GroupAgentBuilderApiName.updateAgentConfig,
+        { config: { model: 'gpt-4o-mini' } },
+        true,
+      );
+
+      expect(mockRefreshAgentConfig).toHaveBeenCalledWith('agt_supervisor');
+    });
+
+    it('refreshes the supervisor config after installPlugin', async () => {
+      await afterCall(
+        GroupAgentBuilderApiName.installPlugin,
+        { identifier: 'lobe-user-memory', source: 'official' },
+        true,
+      );
+
+      expect(mockRefreshAgentConfig).toHaveBeenCalledWith('agt_supervisor');
+      expect(mockRefreshGroupDetail).toHaveBeenCalledWith('cg_1');
+    });
+
+    it('does not refresh the agent config when updateConfig failed', async () => {
+      await afterCall(GroupAgentBuilderApiName.updateAgentConfig, { config: {} }, false);
+
+      expect(mockRefreshAgentConfig).not.toHaveBeenCalled();
     });
 
     it('syncs the open editor after a prompt write so autosave cannot revert it', async () => {
