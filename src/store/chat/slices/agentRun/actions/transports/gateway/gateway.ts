@@ -1313,7 +1313,14 @@ export class GatewayActionImpl {
     // useGatewayReconnect doesn't fire for a stale previous operation while the new
     // gateway connection is being established. Also disconnect any live reconnect
     // connection that was already established for the old operation.
-    if (result.topicId) {
+    //
+    // Not for an approval that continues a group member: the server runs it
+    // under the supervisor's run (the result carries the member as its agent),
+    // so the supervisor keeps the topic, and its open stream is what delivers
+    // the members' continuation and its own closing.
+    const continuesGroupMember =
+      !!executionContext.groupId && !!result.agentId && result.agentId !== executionContext.agentId;
+    if (result.topicId && !continuesGroupMember) {
       const existingTopic = topicSelectors.getTopicById(result.topicId)(this.#get());
       const staleOpId = existingTopic?.metadata?.runningOperation?.operationId;
       if (staleOpId && staleOpId !== result.operationId) {
@@ -1383,7 +1390,10 @@ export class GatewayActionImpl {
         parentMessageId: result.assistantMessageId,
         parentMessageType: 'assistant',
         runId: gatewayOpId,
-        runScope: (resolvedExecutionContext.scope === 'sub_agent'
+        // A member's approval continuation is nested inside the supervisor's
+        // run: top-level terminal effects (queue drain, unread, notification)
+        // belong to the supervisor's own terminal, not to the member's.
+        runScope: (resolvedExecutionContext.scope === 'sub_agent' || continuesGroupMember
           ? 'sub_agent'
           : 'top_level') as RunScope,
         runtimeType: 'gateway',
@@ -1437,7 +1447,8 @@ export class GatewayActionImpl {
           succeeded,
         });
 
-        if (result.topicId) {
+        // The supervisor still owns the topic while a member continuation ends.
+        if (result.topicId && !continuesGroupMember) {
           // The server already settled this topic: the runtime's `finish`
           // executor settles to 'unread' before it publishes the terminal event
           // this callback rides on, so by now the mark is legitimately gone and
