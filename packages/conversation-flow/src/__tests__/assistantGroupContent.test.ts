@@ -239,6 +239,23 @@ describe('partitionAssistantGroupBlocks', () => {
     expect(postToolTailPromoted).toBe(false);
     expect(segments.map(({ kind }) => kind)).toEqual(['workflow']);
   });
+
+  it('keeps a streaming broadcast council visible while the broadcast tool is pending', () => {
+    const member = (id: string) =>
+      ({ content: `${id} streaming…`, createdAt: 0, id, role: 'assistant', updatedAt: 0 }) as const;
+    const council = block('supervisor', '', {
+      council: [member('carol'), member('dave')] as UIChatMessage[],
+    });
+
+    const { segments } = partitionAssistantGroupBlocks(
+      [block('supervisor', '', { tools: [tool('broadcast-call')] }), council],
+      // The broadcast tool stays pending until every member finishes.
+      { isGenerating: true, toolsPhaseComplete: false },
+    );
+
+    expect(segments.map(({ kind }) => kind)).toEqual(['workflow', 'answer']);
+    expect((segments[1] as AssistantGroupAnswerSegment).block.council).toHaveLength(2);
+  });
 });
 
 describe('splitAssistantGroupFinalAnswer', () => {
