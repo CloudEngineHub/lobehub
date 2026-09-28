@@ -318,6 +318,28 @@ describe('normalizeEnvVarRefs', () => {
       );
     });
 
+    it.each(['/', '%', '*'])(
+      'should recognize a comment right after a standalone %s operator',
+      (op) => {
+        expect(
+          normalizeEnvVarRefs(
+            `$x = 4 ${op}# don't expand %PATH%\n2\nWrite-Output %PATH%`,
+            env,
+            'pwsh',
+          ),
+        ).toBe(`$x = 4 ${op}# don't expand %PATH%\n2\nWrite-Output \${env:PATH}`);
+        expect(normalizeEnvVarRefs(`Write-Output a${op}#b %PATH%`, env, 'pwsh')).toBe(
+          `Write-Output a${op}#b \${env:PATH}`,
+        );
+      },
+    );
+
+    it('should end a block comment at the first #> (PowerShell block comments do not nest)', () => {
+      expect(normalizeEnvVarRefs('<# a <# b #> Write-Output %PATH% #>', env, 'pwsh')).toBe(
+        '<# a <# b #> Write-Output ${env:PATH} #>',
+      );
+    });
+
     it('should recognize a comment right after an operator', () => {
       expect(
         normalizeEnvVarRefs("$x = 1 +# don't expand %PATH%\n2\nWrite-Output %PATH%", env, 'pwsh'),

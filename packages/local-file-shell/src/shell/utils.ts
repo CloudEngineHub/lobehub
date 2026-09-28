@@ -396,13 +396,14 @@ const findPowerShellLiteralRanges = (script: string): Array<[number, number]> =>
         i = end;
         continue;
       }
-      // A `-` that is its own token (`2 -# …`) is subtraction, so the `#` after
-      // it starts a comment; inside a word (`a-#b`) it stays part of the word.
-      // Command-mode `-#x` arguments are misread as comments, which only
-      // leaves the rest of that line unrewritten — the safe direction.
-      const standaloneMinus =
-        script[i - 1] === '-' && (i === 1 || /[\s(=,;{|]/.test(script[i - 2]));
-      if (char === '#' && (i === 0 || standaloneMinus || !/[\w$%.:\\/-]/.test(script[i - 1]))) {
+      // An operator that is its own token (`2 -# …`, `4 /# …`, `5 %# …`) is
+      // arithmetic, so the `#` after it starts a comment; inside a word
+      // (`a-#b`, `a/#b`, `a%#b`) it stays part of the word. Command-mode
+      // arguments like `-#x` are misread as comments, which only leaves the
+      // rest of that line unrewritten — the safe direction.
+      const standaloneOperator =
+        /[-/%*]/.test(script[i - 1] ?? '') && (i === 1 || /[\s(=,;{|]/.test(script[i - 2]));
+      if (char === '#' && (i === 0 || standaloneOperator || !/[\w$%*.:\\/-]/.test(script[i - 1]))) {
         const newline = script.indexOf('\n', i);
         const end = newline === -1 ? length : newline;
         ranges.push([i, end]);
