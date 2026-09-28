@@ -307,6 +307,17 @@ describe('normalizeEnvVarRefs', () => {
       ).toBe(`Write-Output "$('%PATH%') and $(("\${env:PATH}"))" \${env:PATH}`);
     });
 
+    it('should recognize a comment right after a standalone subtraction operator', () => {
+      // `2 -# …` is subtraction followed by a comment (verified in pwsh: the
+      // expression continues on the next line), while `a-#b` stays a bare word.
+      expect(
+        normalizeEnvVarRefs("$x = 2 -# don't expand %PATH%\n1\nWrite-Output %PATH%", env, 'pwsh'),
+      ).toBe("$x = 2 -# don't expand %PATH%\n1\nWrite-Output ${env:PATH}");
+      expect(normalizeEnvVarRefs('Write-Output a-#b %PATH%', env, 'pwsh')).toBe(
+        'Write-Output a-#b ${env:PATH}',
+      );
+    });
+
     it('should recognize a comment right after an operator', () => {
       expect(
         normalizeEnvVarRefs("$x = 1 +# don't expand %PATH%\n2\nWrite-Output %PATH%", env, 'pwsh'),
