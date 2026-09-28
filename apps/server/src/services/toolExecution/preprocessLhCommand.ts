@@ -166,9 +166,11 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", St
  * (`nohup lh … &`, `(sleep 5; lh …) &`) may exec `lh` after the script ends, so
  * when there are any, a detached watcher removes the wrapper only once they
  * have all exited — without making the command itself wait for them. A job
- * detached further (`( lh … & )`, `disown`) is not tracked and may lose the
- * race. If the wrapper cannot be written, the script exits before the command
- * runs rather than letting `lh` fall through to an unauthenticated one.
+ * detached further (`( lh … & )`, `disown`), or left behind by a command that
+ * `exec`s another program (which replaces the subshell and skips its EXIT
+ * trap; `exec` is a special builtin a function cannot intercept), is not
+ * tracked and may lose the race. If the wrapper cannot be written, the script
+ * exits before the command runs rather than letting `lh` fall through to an unauthenticated one.
  *
  * `LOBEHUB_WORKSPACE_ID` is what keeps a workspace run's CLI calls in the
  * workspace: without it the CLI resolves to personal scope and a workspace
