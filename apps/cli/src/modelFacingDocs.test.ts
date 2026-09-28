@@ -70,7 +70,9 @@ const checkSnippet = (snippet: string): string[] => {
   if (cmd === program) return [];
 
   const problems: string[] = [];
-  for (const match of snippet.matchAll(/(?<![\w-])(--?[a-z][\w-]*)(\s+\S+)?/gi)) {
+  // Match each flag on its own so an adjacent flag is never swallowed as the
+  // previous one's value; the following token is only inspected for arity.
+  for (const match of snippet.matchAll(/(?<![\w-])(--?[a-z][\w-]*)/gi)) {
     const flag = match[1];
     if (flag === '--help' || flag === '-h') continue;
     const option = cmd.options.find((opt) => opt.long === flag || opt.short === flag);
@@ -78,7 +80,10 @@ const checkSnippet = (snippet: string): string[] => {
       problems.push(`unknown option ${flag} on "lh ${commandPath.join(' ')}"`);
       continue;
     }
-    const next = match[2]?.trim();
+    const next = snippet
+      .slice(match.index + flag.length)
+      .trim()
+      .split(/\s+/)[0];
     if (option.required && (!next || next.startsWith('-') || next.startsWith(']'))) {
       problems.push(`option ${flag} on "lh ${commandPath.join(' ')}" requires a value`);
     }
@@ -145,6 +150,10 @@ describe('model-facing lh CLI docs', () => {
       'option --replay on "lh agent run" requires a value',
     ]);
     expect(checkSnippet('lh whoami --json')).toEqual([]);
+    // An adjacent flag must be validated, not read as the previous flag's value.
+    expect(checkSnippet('lh usage --daily --stale')).toEqual([
+      'unknown option --stale on "lh usage"',
+    ]);
     expect(
       checkSnippet('lh eval run-topic report-result --run-id <id> --topic-id <id> --score <n>'),
     ).toEqual([
