@@ -1,5 +1,6 @@
 import type { VerifyCheckItem } from '@lobechat/types';
 import debug from 'debug';
+import pMap from 'p-map';
 
 import { AgentOperationModel } from '@/database/models/agentOperation';
 import { VerifyCheckResultModel } from '@/database/models/verifyCheckResult';
@@ -233,7 +234,12 @@ const recoverEvidenceRun = async (
     if (collectorUnknown || (evidenceOp && LIVE_OPERATION_STATUSES.has(evidenceOp.status)))
       return 'skipped';
     if (!deliverable) return closeOutstandingAsErrored(db, run, operationId, now, 'abandoned');
-    return enterJudging(db, run, operationId, run.userId, workspaceId, now, deliverable, 'settled');
+    // No backfill here: synthetic deliverable rows would structurally cover the
+    // criteria the collector never reached and let them pass without evidence.
+    return enterJudging(db, run, operationId, run.userId, workspaceId, now, deliverable, {
+      action: 'settled',
+      backfill: false,
+    });
   }
 
   // No evidence yet: a live evidence turn may still submit, so only proceed
@@ -250,16 +256,10 @@ const recoverEvidenceRun = async (
     return closeOutstandingAsErrored(db, run, operationId, now, 'abandoned');
   }
 
-  return enterJudging(
-    db,
-    run,
-    operationId,
-    run.userId,
-    workspaceId,
-    now,
-    deliverable,
-    'evidenceRecovered',
-  );
+  return enterJudging(db, run, operationId, run.userId, workspaceId, now, deliverable, {
+    action: 'evidenceRecovered',
+    backfill: true,
+  });
 };
 
 /**
@@ -332,26 +332,26 @@ const closeOutstandingAsErrored = async (
   const plan = (run.plan ?? []) as VerifyCheckItem[];
   const resultModel = new VerifyCheckResultModel(db, run.userId, workspaceId);
 
-  await Promise.all(
-    plan
-      .filter((item) => item.required)
-      .map((item) =>
-        // Upsert, not update: an item with no row at all must still land as
-        // `errored`, and a pending row (evidence uploaded mid-run) is closed too.
-        resultModel.upsertByCheckItem({
-          ...planItemToPendingResult(run.id, operationId, item),
-          // Re-asserted after the spread: the upsert key is required, and the
-          // snapshot's own fields are optional-nullable.
-          checkItemId: item.id,
-          verifyRunId: run.id,
-          completedAt: now,
-          status: 'errored',
-          suggestion: 'Rerun verification for this delivery.',
-          toulmin: {
-            limitation: 'Evidence collection was interrupted before this check was judged.',
-          },
-        }),
-      ),
+  // Bounded fan-out: the plan is a runtime-sized list and each item is a DB write.
+  await pMap(
+    plan.filter((item) => item.required),
+    (item) =>
+      // Upsert, not update: an item with no row at all must still land as
+      // `errored`, and a pending row (evidence uploaded mid-run) is closed too.
+      resultModel.upsertByCheckItem({
+        ...planItemToPendingResult(run.id, operationId, item),
+        // Re-asserted after the spread: the upsert key is required, and the
+        // snapshot's own fields are optional-nullable.
+        checkItemId: item.id,
+        verifyRunId: run.id,
+        completedAt: now,
+        status: 'errored',
+        suggestion: 'Rerun verification for this delivery.',
+        toulmin: {
+          limitation: 'Evidence collection was interrupted before this check was judged.',
+        },
+      }),
+    { concurrency: 5 },
   );
 
   await statusService.recompute(operationId);
@@ -372,9 +372,11 @@ const closeOutstandingAsErrored = async (
  *
  * `deliverable` is the hook's frozen final output, recovered by the caller —
  * both call sites pass it non-empty, and the executor requires it for judging.
- * The evidence backfill runs here, after the claim: an overlapping sweep that
- * loses the lease must not double-insert the evidence rows (`createMany` is an
- * unconstrained insert).
+ * `backfill` is only for the zero-evidence path: when the collector submitted
+ * part of the plan, inserting the deliverable for every criterion would cover
+ * the ones it never reached. The backfill runs after the claim: an overlapping
+ * sweep that loses the lease must not double-insert the evidence rows
+ * (`createMany` is an unconstrained insert).
  */
 const enterJudging = async (
   db: LobeChatDatabase,
@@ -384,7 +386,7 @@ const enterJudging = async (
   workspaceId: string | undefined,
   now: Date,
   deliverable: string,
-  action: 'abandoned' | 'settled' | 'evidenceRecovered',
+  { action, backfill }: { action: 'settled' | 'evidenceRecovered'; backfill: boolean },
 ): Promise<'abandoned' | 'settled' | 'evidenceRecovered' | 'skipped'> => {
   const statusService = new VerifyStatusService(db, userId, workspaceId);
   if (
@@ -406,14 +408,16 @@ const enterJudging = async (
   // The backfill write follows the lease, not the skip guards — an overlapping
   // worker that reaches the insert before its claim attempt must not duplicate
   // the evidence rows against the winner's insert.
-  await recordHeterogeneousDeliverableEvidence({
-    db,
-    deliverable,
-    operation: op,
-    plan: (run.plan ?? []) as VerifyCheckItem[],
-    userId,
-    workspaceId,
-  });
+  if (backfill) {
+    await recordHeterogeneousDeliverableEvidence({
+      db,
+      deliverable,
+      operation: op,
+      plan: (run.plan ?? []) as VerifyCheckItem[],
+      userId,
+      workspaceId,
+    });
+  }
 
   const resolvedAcceptance = op.taskId
     ? await resolveTaskAcceptance(db, userId, op.taskId, workspaceId)
@@ -441,10 +445,11 @@ const enterJudging = async (
     workspaceId,
   );
 
+  const goal = run.goal ?? '';
   const executor = new VerifyExecutorService(db, userId, workspaceId);
   await executor.execute({
     deliverable: resolvedDeliverable,
-    goal: run.goal ?? '',
+    goal,
     modelConfig,
     operationId,
     runVerifierAgent: createVerifierAgentRunner({
@@ -460,7 +465,15 @@ const enterJudging = async (
     }),
   });
 
-  await finalizeVerifyRun(db, userId, operationId, {}, workspaceId);
+  // The same report context the completion lifecycle passes: an inline judge
+  // pass settles here and nothing re-enters the finalizer with it later.
+  await finalizeVerifyRun(
+    db,
+    userId,
+    operationId,
+    { report: { deliverable: resolvedDeliverable, goal, modelConfig } },
+    workspaceId,
+  );
 
   log('recovered run %s (op %s) as %s', run.id, operationId, action);
   return action;

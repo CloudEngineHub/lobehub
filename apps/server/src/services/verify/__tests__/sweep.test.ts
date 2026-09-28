@@ -431,7 +431,21 @@ describe('sweepStuckVerifyRuns — collecting_evidence', () => {
     expect(executorExecute).toHaveBeenCalledWith(
       expect.objectContaining({ deliverable: 'final patch text', goal: '', operationId: 'op-1' }),
     );
-    expect(finalizeVerifyRun).toHaveBeenCalledWith(db, 'u1', 'op-1', {}, undefined);
+    // The report context the completion lifecycle passes — nothing re-enters the
+    // finalizer later with it, so an empty one would settle without a report.
+    expect(finalizeVerifyRun).toHaveBeenCalledWith(
+      db,
+      'u1',
+      'op-1',
+      {
+        report: {
+          deliverable: 'final patch text',
+          goal: '',
+          modelConfig: { model: 'gpt-4o', provider: 'openai' },
+        },
+      },
+      undefined,
+    );
   });
 
   it('identifies the continuation by the evidence hook, not child order', async () => {
@@ -550,6 +564,9 @@ describe('sweepStuckVerifyRuns — collecting_evidence', () => {
     const outcome = await sweepStuckVerifyRuns(db, { now: NOW });
 
     expect(executorExecute).toHaveBeenCalledWith(expect.objectContaining({ operationId: 'op-1' }));
+    // Synthetic deliverable rows would structurally cover the criteria the
+    // collector never reached.
+    expect(recordHeterogeneousDeliverableEvidence).not.toHaveBeenCalled();
     expect(outcome.settled).toEqual(['ev-run-1']);
   });
 
