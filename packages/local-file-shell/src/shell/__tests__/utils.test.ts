@@ -334,6 +334,23 @@ describe('normalizeEnvVarRefs', () => {
       },
     );
 
+    it('should keep # inside a bare argument that already started, even after punctuation', () => {
+      // Verified in pwsh: `key=#literal`, `a+#b`, `x:#y` print as one word each.
+      expect(normalizeEnvVarRefs('tool key=#literal %PATH%', env, 'pwsh')).toBe(
+        'tool key=#literal ${env:PATH}',
+      );
+      expect(normalizeEnvVarRefs('tool a+#b x:#y %PATH%', env, 'pwsh')).toBe(
+        'tool a+#b x:#y ${env:PATH}',
+      );
+      // …but a token terminator or a standalone `=` starts a new token.
+      expect(normalizeEnvVarRefs("$x =# don't %PATH%\n5\nWrite-Output %PATH%", env, 'pwsh')).toBe(
+        "$x =# don't %PATH%\n5\nWrite-Output ${env:PATH}",
+      );
+      expect(normalizeEnvVarRefs("echo a,# don't %PATH%\nWrite-Output %PATH%", env, 'pwsh')).toBe(
+        "echo a,# don't %PATH%\nWrite-Output ${env:PATH}",
+      );
+    });
+
     it('should end a block comment at the first #> (PowerShell block comments do not nest)', () => {
       expect(normalizeEnvVarRefs('<# a <# b #> Write-Output %PATH% #>', env, 'pwsh')).toBe(
         '<# a <# b #> Write-Output ${env:PATH} #>',

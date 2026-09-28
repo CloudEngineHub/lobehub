@@ -309,6 +309,17 @@ export const getShellInfo = async (): Promise<ShellInfo> =>
  * extends to the end of the script, which errs on the side of leaving text
  * untouched.
  */
+/**
+ * Whether a `#` at `index` begins a PowerShell comment, i.e. sits at the start
+ * of a token rather than inside a bare word (see the call site).
+ */
+const startsPowerShellComment = (script: string, index: number): boolean => {
+  let j = index - 1;
+  while (j >= 0 && !/[\s;|&(){},]/.test(script[j])) j -= 1;
+  const run = script.slice(j + 1, index);
+  return run === '' || /^[-+*/%=!<>]+$/.test(run);
+};
+
 const findPowerShellLiteralRanges = (script: string): Array<[number, number]> => {
   const ranges: Array<[number, number]> = [];
   const length = script.length;
@@ -396,14 +407,13 @@ const findPowerShellLiteralRanges = (script: string): Array<[number, number]> =>
         i = end;
         continue;
       }
-      // An operator that is its own token (`2 -# …`, `4 /# …`, `5 %# …`) is
-      // arithmetic, so the `#` after it starts a comment; inside a word
-      // (`a-#b`, `a/#b`, `a%#b`) it stays part of the word. Command-mode
-      // arguments like `-#x` are misread as comments, which only leaves the
-      // rest of that line unrewritten — the safe direction.
-      const standaloneOperator =
-        /[-/%*]/.test(script[i - 1] ?? '') && (i === 1 || /[\s(=,;{|]/.test(script[i - 2]));
-      if (char === '#' && (i === 0 || standaloneOperator || !/[\w$%*.:\\/-]/.test(script[i - 1]))) {
+      // `#` opens a comment only where a new token starts: after whitespace or
+      // a token terminator (`; | & ( ) { } ,`), or after a run made only of
+      // operator characters that is itself a token (`2 -# …`, `$x =# …`).
+      // Once a bare word has started, `#` is part of it (`a-#b`, `key=#v`,
+      // `x:#y`). Command-mode arguments like `-#x` are misread as comments,
+      // which only leaves the rest of that line unrewritten — the safe side.
+      if (char === '#' && startsPowerShellComment(script, i)) {
         const newline = script.indexOf('\n', i);
         const end = newline === -1 ? length : newline;
         ranges.push([i, end]);
