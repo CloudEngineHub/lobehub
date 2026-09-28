@@ -226,7 +226,6 @@ export class SkillParser {
 
     for (const token of marked.lexer(content)) {
       if (token.type === 'heading') {
-        if (description) break;
         if (!name && (token as Tokens.Heading).depth === 1) {
           name = inlineToPlainText((token as Tokens.Heading).tokens) || undefined;
         }
