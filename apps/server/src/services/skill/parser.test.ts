@@ -345,6 +345,15 @@ Some paragraph that must not become the description.`;
       expect(result.manifest.description).toBe('Write a &amp; b or &copy; literally; © renders.');
     });
 
+    it('should turn inline HTML line breaks into spaces', () => {
+      const result = parser.parseSkillMd(
+        '# Stock<br>Watcher\n\nFast<br />monitoring, <BR/>daily <span>alerts</span>.\n',
+      );
+
+      expect(result.manifest.name).toBe('Stock Watcher');
+      expect(result.manifest.description).toBe('Fast monitoring, daily alerts.');
+    });
+
     it('should never take a multi-line HTML comment body as the description', () => {
       expect(() =>
         parser.parseSkillMd('# Title\n\n<!--\ninternal metadata\n-->\n', { fallbackName: 'x' }),

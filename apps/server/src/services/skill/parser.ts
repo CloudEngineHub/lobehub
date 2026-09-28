@@ -45,7 +45,8 @@ export interface ParseZipOptions extends ParseSkillMdOptions {
 
 /**
  * Visible plain text of inline Markdown tokens: link labels, emphasis and code
- * span contents are kept; images and inline HTML (comments, tags) are dropped.
+ * span contents are kept; images and inline HTML (comments, tags) are dropped,
+ * and `<br>` becomes a space.
  */
 const inlineToPlainText = (tokens: Token[] = []): string =>
   flattenInline(tokens).replaceAll(/\s+/g, ' ').trim();
@@ -54,9 +55,12 @@ const flattenInline = (tokens: Token[]): string =>
   tokens
     .map((token): string => {
       switch (token.type) {
-        case 'image':
-        case 'html': {
+        case 'image': {
           return '';
+        }
+        // Inline HTML is dropped, except a `<br>` which renders as a line break
+        case 'html': {
+          return /^<br\s*\/?>$/i.test((token as Tokens.HTML).text.trim()) ? ' ' : '';
         }
         case 'br': {
           return ' ';
