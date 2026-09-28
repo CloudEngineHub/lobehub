@@ -28,14 +28,23 @@ const program = createProgram() as Command;
 const findSubcommand = (cmd: Command, name: string) =>
   cmd.commands.find((sub) => sub.name() === name || sub.aliases().includes(name));
 
-/** Every `lh …` inline code span and every code-block line starting with `lh `. */
+/**
+ * Every `lh …` inline code span and every code-block command starting with
+ * `lh `, with backslash line continuations joined into one invocation.
+ */
 const extractSnippets = (source: string): string[] => {
   const text = source.replaceAll('\\`', '`');
   const snippets = new Set<string>();
   for (const match of text.matchAll(/`((?:[^\n`]*?\s)?lh [a-z][^\n`]*)`/g)) snippets.add(match[1]);
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (/^lh [a-z]/.test(trimmed)) snippets.add(trimmed);
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    let command = lines[i].trim();
+    if (!/^lh [a-z]/.test(command)) continue;
+    // Template-literal sources escape the continuation backslash as `\\`.
+    while (/\\+$/.test(command) && i + 1 < lines.length) {
+      command = `${command.replace(/\\+$/, '').trimEnd()} ${lines[++i].trim()}`;
+    }
+    snippets.add(command);
   }
   return [...snippets];
 };
@@ -45,6 +54,7 @@ const checkSnippet = (snippet: string): string[] => {
   let cmd = program;
   const commandPath: string[] = [];
 
+  let consumed = 0;
   for (const token of tokens) {
     if (cmd.commands.length === 0 || !/^[a-z][\w-]*$/.test(token)) break;
     const sub = findSubcommand(cmd, token);
@@ -55,6 +65,7 @@ const checkSnippet = (snippet: string): string[] => {
     }
     cmd = sub;
     commandPath.push(token);
+    consumed += 1;
   }
   if (cmd === program) return [];
 
@@ -71,6 +82,44 @@ const checkSnippet = (snippet: string): string[] => {
     if (option.required && (!next || next.startsWith('-') || next.startsWith(']'))) {
       problems.push(`option ${flag} on "lh ${commandPath.join(' ')}" requires a value`);
     }
+  }
+
+  // A bare `lh kb view` in prose names the command; only a written-out
+  // invocation (anything after the command path) must be complete.
+  const rest = tokens.slice(consumed).filter(Boolean);
+  if (rest.length === 0) return problems;
+
+  const used = new Set(
+    [...snippet.matchAll(/(?<![\w-])(--?[a-z][\w-]*)/gi)].map((match) => match[1]),
+  );
+  for (const option of cmd.options) {
+    if (option.mandatory && !used.has(option.long!) && !used.has(option.short!)) {
+      problems.push(`missing required option ${option.long} on "lh ${commandPath.join(' ')}"`);
+    }
+  }
+
+  // Count positionals outside `[...]` groups, skipping flags and their values.
+  let depth = 0;
+  let positionals = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const token = rest[i];
+    const opens = (token.match(/\[/g) ?? []).length;
+    const closes = (token.match(/\]/g) ?? []).length;
+    const optional = depth > 0 || token.startsWith('[');
+    depth += opens - closes;
+    if (optional) continue;
+    if (token.startsWith('-')) {
+      const option = cmd.options.find((opt) => opt.long === token || opt.short === token);
+      if (option?.required || option?.optional) i += 1;
+      continue;
+    }
+    positionals += 1;
+  }
+  const requiredArgs = cmd.registeredArguments.filter((arg) => arg.required).length;
+  if (positionals < requiredArgs) {
+    problems.push(
+      `missing required argument on "lh ${commandPath.join(' ')}" (expects ${requiredArgs}, got ${positionals})`,
+    );
   }
   return problems;
 };
@@ -90,10 +139,22 @@ describe('model-facing lh CLI docs', () => {
     expect(checkSnippet('lh config whoami')).toEqual(['unknown command "lh config"']);
     expect(checkSnippet('lh eval run get --run-id <id>')).toEqual([
       'unknown option --run-id on "lh eval run get"',
+      'missing required option --id on "lh eval run get"',
     ]);
     expect(checkSnippet('lh agent run -a <id> --replay')).toEqual([
       'option --replay on "lh agent run" requires a value',
     ]);
     expect(checkSnippet('lh whoami --json')).toEqual([]);
+    expect(
+      checkSnippet('lh eval run-topic report-result --run-id <id> --topic-id <id> --score <n>'),
+    ).toEqual([
+      'missing required option --correct on "lh eval run-topic report-result"',
+      'missing required option --result-json on "lh eval run-topic report-result"',
+    ]);
+    expect(checkSnippet('lh kb upload <kbId> [--parent <folderId>]')).toEqual([
+      'missing required argument on "lh kb upload" (expects 2, got 1)',
+    ]);
+    // A bare command name in prose is a reference, not an invocation.
+    expect(checkSnippet('lh kb view')).toEqual([]);
   });
 });

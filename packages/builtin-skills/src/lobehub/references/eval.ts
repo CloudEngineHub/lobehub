@@ -20,7 +20,7 @@ evaluation workflows. Resource IDs are passed with \`--id\` (not \`--run-id\` /
 - \`lh eval thread list --topic-id <id>\` - List threads by topic
 - \`lh eval message list --topic-id <id> [--thread-id <id>]\` - List messages
 - \`lh eval agent run --run-id <id> --case-id <id>\` - Execute one case of a claimed run
-- \`lh eval run-topic report-result --run-id <id> --topic-id <id> --score <n>\` - Report one result
+- \`lh eval run-topic report-result --run-id <id> --topic-id <id> --score <n> --correct <true|false> --result-json <json>\` - Report one result (\`--thread-id <id>\` when k > 1)
 - \`lh eval run-topic report-results --run-id <id> --file <path>\` - Batch report results
 
 ## Datasets and test cases

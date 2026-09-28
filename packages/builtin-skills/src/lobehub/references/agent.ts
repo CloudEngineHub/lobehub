@@ -38,7 +38,7 @@ actually landed instead of assuming it did.
 
 - Use \`--slug\` to reference agents by slug instead of ID
 - \`lh agent run --replay <file>\` replays events from a JSON file saved by an earlier \`--json\` run (offline)
-- \`lh agent status --history\` shows operation execution history
+- \`lh agent status <operationId> --history\` shows operation execution history
 - Commands run in the same workspace as you. \`lh whoami\` prints that scope —
   check it first if an agent, topic or file you expect to exist reports "not found"
 `;
