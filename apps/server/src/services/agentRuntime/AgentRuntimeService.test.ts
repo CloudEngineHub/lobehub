@@ -632,6 +632,38 @@ describe('AgentRuntimeService', () => {
       expect(recordStart.mock.calls[0][0].metadata).toMatchObject({ groupMemberBridge: bridge });
     });
 
+    // Codex P2 on #20093: a transient start-row failure used to be swallowed,
+    // so the member ran without the durable bridge its Stop / late approval need.
+    it('refuses to start a group member whose bridge row could not be persisted', async () => {
+      vi.spyOn(AgentOperationModel.prototype, 'recordStart').mockRejectedValue(
+        new Error('db down'),
+      );
+
+      await expect(
+        service.createOperation({
+          ...mockParams,
+          hooks: [
+            {
+              handler: vi.fn(),
+              id: 'group-member-bridge',
+              type: 'onComplete',
+              webhook: {
+                body: {
+                  anchorMessageId: 'msg-speak',
+                  expectedMembers: 1,
+                  groupToolMessageId: 'msg-speak',
+                  mode: 'in_group',
+                  onComplete: 'resume',
+                  parentOperationId: 'op-supervisor',
+                },
+                url: '/api/agent/webhooks/group-member-callback',
+              },
+            },
+          ],
+        } as any),
+      ).rejects.toThrow('Failed to durably persist group member');
+    });
+
     it('keeps the frozen model facts on the run state but out of durable storage', async () => {
       const recordStart = vi
         .spyOn(AgentOperationModel.prototype, 'recordStart')

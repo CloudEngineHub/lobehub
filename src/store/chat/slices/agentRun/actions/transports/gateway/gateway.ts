@@ -963,7 +963,7 @@ export class GatewayActionImpl {
     // decided server-side by the share config, never by this client.
     const agentShareId = executionContext.agentShareId;
 
-    const result =
+    const serverResult =
       precreatedResult ??
       (agentShareId
         ? await shareChatService.execAgentTask(
@@ -1046,6 +1046,12 @@ export class GatewayActionImpl {
             },
             { signal: abortSignal },
           ));
+    // A member continuation names the supervisor's run as `operationId` (safe
+    // for older clients); this run is the member's continuation.
+    const result: ExecAgentResult =
+      serverResult.groupMemberContinuation && serverResult.memberOperationId
+        ? { ...serverResult, operationId: serverResult.memberOperationId }
+        : serverResult;
 
     // Persistence is the ownership boundary. Notify before later UI synchronization awaits and
     // before handling a late abort so callers never delete a file already attached server-side.

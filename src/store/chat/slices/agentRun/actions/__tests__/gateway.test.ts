@@ -1008,7 +1008,8 @@ describe('GatewayActionImpl', () => {
           ...execResult,
           agentId: 'agt_carol',
           groupMemberContinuation: true,
-          operationId: 'server-member-op',
+          memberOperationId: 'server-member-op',
+          operationId: 'server-supervisor-op',
         } as any);
         const topicSpy = vi.spyOn(topicSelectors, 'getTopicById').mockReturnValue(
           () =>
@@ -1051,7 +1052,8 @@ describe('GatewayActionImpl', () => {
         vi.mocked(aiAgentService.execAgentTask).mockResolvedValue({
           ...execResult,
           groupMemberContinuation: true,
-          operationId: 'server-member-op',
+          memberOperationId: 'server-member-op',
+          operationId: 'server-supervisor-op',
         } as any);
         const topicSpy = vi.spyOn(topicSelectors, 'getTopicById').mockReturnValue(
           () =>
@@ -1087,6 +1089,35 @@ describe('GatewayActionImpl', () => {
         topicSpy.mockRestore();
       });
 
+      // Codex P1 on #20093: the server names the supervisor's run as operationId
+      // so older clients keep following it; this client runs the member op.
+      it('follows the member continuation op the server sets aside', async () => {
+        const { action, connectToGateway } = createExecuteTestAction();
+        vi.mocked(aiAgentService.execAgentTask).mockResolvedValue({
+          ...execResult,
+          agentId: 'agt_carol',
+          groupMemberContinuation: true,
+          memberOperationId: 'server-member-op',
+          operationId: 'server-supervisor-op',
+        } as any);
+
+        await action.executeGatewayAgent({
+          context: {
+            agentId: 'agt_sup',
+            groupId,
+            scope: 'group',
+            threadId: null,
+            topicId: 'topic-1',
+          },
+          message: '',
+          parentMessageId: 'carol-tool',
+        });
+
+        expect(connectToGateway.mock.calls[0][0]).toMatchObject({
+          operationId: 'server-member-op',
+        });
+      });
+
       it("still takes over a stale marker for the supervisor's own new run", async () => {
         const { action } = createExecuteTestAction();
         const topicSpy = vi.spyOn(topicSelectors, 'getTopicById').mockReturnValue(
@@ -1120,7 +1151,8 @@ describe('GatewayActionImpl', () => {
           ...execResult,
           agentId: 'agt_carol',
           groupMemberContinuation: true,
-          operationId: 'server-member-op',
+          memberOperationId: 'server-member-op',
+          operationId: 'server-supervisor-op',
         } as any);
         (action as any).clearLocalRunningOperation = vi.fn();
         vi.mocked(topicService.settleRunningOperation).mockClear();

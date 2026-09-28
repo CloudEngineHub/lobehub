@@ -336,6 +336,14 @@ export interface ExecAgentResult {
    * talking to an older server that did not yet return this discriminator.
    */
   heteroType?: string | null;
+  /**
+   * With `groupMemberContinuation`: the member's continuation operation. The
+   * client-facing `operationId` then names the supervisor's run, so a client
+   * released before this field keeps following the supervisor (its stream
+   * carries the member's continuation and the supervisor's closing) instead of
+   * taking the topic over and dropping it.
+   */
+  memberOperationId?: string;
   /** Status message */
   message: string;
   /** Queue message ID if auto-started */
@@ -346,6 +354,11 @@ export interface ExecAgentResult {
   status: string;
   /** Whether the operation was created successfully */
   success: boolean;
+  /**
+   * Server-side only, with `groupMemberContinuation`: the supervisor run the
+   * member continues under. Mapped into the client shape by the router.
+   */
+  supervisorOperationId?: string;
   /**
    * The failure was already announced through the run's terminal lifecycle —
    * `CompletionLifecycle` fired its `onComplete` hooks, so every consumer of

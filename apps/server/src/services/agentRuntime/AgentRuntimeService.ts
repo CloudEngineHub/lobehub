@@ -1102,6 +1102,13 @@ export class AgentRuntimeService {
       );
     }
 
+    // A member's durable bridge is what a Stop or a late approval falls back
+    // to once the runtime snapshot expires; a member without it could strand
+    // its supervisor, so fail the start instead.
+    if (groupMemberBridge && !operationStartPersisted) {
+      throw new Error(`Failed to durably persist group member ${operationId} before dispatch`);
+    }
+
     if (interventionResolution) {
       const durableOperation = await this.agentOperationModel.findById(operationId);
       const persistedProvenance = durableOperation?.metadata?.agentInterventionContinuation;
