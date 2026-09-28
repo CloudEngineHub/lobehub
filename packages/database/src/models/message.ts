@@ -230,6 +230,16 @@ export interface QueryMessagesOptions {
    */
   current?: number;
   /**
+   * Constrain MessageGroup assembly to an explicit `[from, before)` time window
+   * instead of loading every group in the topic (or deriving the window from the
+   * fetched rows). Set by cursor pagination so consecutive pages partition the
+   * topic's groups exactly once: a scroll-up page neither repeats group nodes nor
+   * drops the ones dated between (or older than) its mainline rows. Either bound
+   * may be omitted to leave that side open. Bounds are lossless microsecond
+   * timestamp strings compared with a `::timestamptz` cast.
+   */
+  groupNodeWindow?: MessageGroupNodeWindow;
+  /**
    * Opt-in for `file` work summaries in the payload (see
    * `QueryMessageParams.includeFileWorks`).
    */
@@ -258,12 +268,6 @@ export interface QueryMessagesOptions {
    * Custom where condition for message filtering
    */
   where?: SQL;
-  /**
-   * Constrain MessageGroup assembly to the fetched page's time window instead of
-   * loading every group in the topic. Set by cursor pagination so a scroll-up
-   * page does not re-load (and repeat) group nodes outside `[lowerBound, cursor)`.
-   */
-  windowGroupNodes?: boolean;
   /**
    * Agent Share boundary for the Work-summary assembly. Omitted = ordinary
    * scope, which never resolves a share visitor's Works; the share read path
@@ -303,6 +307,11 @@ export interface MessageRoundCursor {
 }
 
 export interface QueryTopicByCursorParams {
+  /**
+   * Ignored: a concrete topic is the conversation boundary and may hold rows
+   * from several agents/sessions (e.g. `callAgent` replies), same as `query`.
+   * Accepted only so callers can forward their usual query params.
+   */
   agentId?: string | null;
   /** Hard cap on rows walked when resolving the round window (safety, ~rows). */
   countBudget?: number;
@@ -310,6 +319,7 @@ export interface QueryTopicByCursorParams {
   cursor?: MessageRoundCursor | null;
   /** How many rounds to load per page (the current round is always whole). */
   roundLimit?: number;
+  /** Ignored for the same reason as `agentId`. */
   sessionId?: string | null;
   skipWorks?: boolean;
   topicId: string;
@@ -333,6 +343,12 @@ const DEFAULT_ROUND_COUNT_BUDGET = 2000;
  * result stays below `pageSize`, so the trim guard never fires).
  */
 const CURSOR_PAGE_CEILING = 100_000;
+
+/** Half-open `[from, before)` MessageGroup window; see `groupNodeWindow`. */
+export interface MessageGroupNodeWindow {
+  before?: string | null;
+  from?: string | null;
+}
 
 export interface ModelTimingContext extends TimingSink {}
 
@@ -1524,7 +1540,7 @@ export class MessageModel {
       timing,
       allowShareVisitor,
       workAccessScope,
-      windowGroupNodes,
+      groupNodeWindow,
     } = options;
     const totalStartedAt = Date.now();
     const offset = current * pageSize;
@@ -1664,7 +1680,7 @@ export class MessageModel {
       result,
       timing,
       topicId,
-      windowed: windowGroupNodes,
+      window: groupNodeWindow,
     });
 
     const taskMessageIds = result
@@ -1849,11 +1865,9 @@ export class MessageModel {
    */
   queryTopicMessagesByCursor = async (
     {
-      agentId,
       countBudget = DEFAULT_ROUND_COUNT_BUDGET,
       cursor,
       roundLimit = DEFAULT_ROUND_LIMIT,
-      sessionId,
       skipWorks,
       topicId,
     }: QueryTopicByCursorParams,
@@ -1865,14 +1879,11 @@ export class MessageModel {
       timing?: ModelTimingContext;
     } = {},
   ): Promise<TopicMessagesByCursorResult> => {
-    const agentCondition = agentId
-      ? await this.buildAgentCondition(agentId)
-      : this.matchSession(sessionId);
-
-    // Mainline = this agent/topic, not in a group and not in a thread. Mirrors the
-    // standard `query` composition so the cursor window matches what would render.
+    // Mainline = this topic, not in a group and not in a thread. Like the standard
+    // `query`, a concrete topic is the conversation boundary: it is NOT narrowed by
+    // agent/session, because a topic may legitimately hold rows from several agents
+    // (e.g. `callAgent` / delegated replies) and those must still render.
     const mainlineWhere = and(
-      agentCondition,
       this.matchTopic(topicId),
       this.matchGroup(undefined),
       this.matchThread(undefined),
@@ -1885,19 +1896,33 @@ export class MessageModel {
       roundLimit,
     });
 
-    // No lower bound means the window is empty — either the topic has no mainline
-    // messages, or a cursor was given and nothing older remains. Return an empty
-    // page directly; an unbounded `where` would wrongly reload the entire topic.
-    if (!lowerBound) return { hasMore: false, messages: [], nextCursor: null };
+    // MessageGroup nodes (compression / comparison) are partitioned across pages
+    // by the same `[lowerBound, cursor)` window as mainline rows, so each group is
+    // emitted exactly once over a full backward walk. The oldest page (`!hasMore`)
+    // leaves the lower side open so groups dated before the first remaining
+    // mainline row — including a topic whose whole history was compressed — stay
+    // reachable instead of vanishing.
+    const groupNodeWindow: MessageGroupNodeWindow = {
+      before: cursor?.createdAt ?? null,
+      from: hasMore && lowerBound ? lowerBound.createdAt : null,
+    };
 
-    // Bound the window on BOTH sides: at/after the resolved round start, and —
-    // when paging older — strictly before the cursor. Without the upper bound the
-    // window would also re-include every newer round already loaded.
-    const where = and(
-      mainlineWhere,
-      this.messageAtOrAfter(lowerBound),
-      cursor ? this.messageStrictlyBefore(cursor) : undefined,
-    );
+    // No lower bound means no mainline rows remain — either the topic has none
+    // (e.g. compression moved every message into a group) or nothing older than
+    // the cursor is left. The page is then group-only: fetch no mainline rows (an
+    // unbounded `where` would wrongly reload the entire topic) but still assemble
+    // the remaining group nodes.
+    //
+    // Otherwise bound the window on BOTH sides: at/after the resolved round start,
+    // and — when paging older — strictly before the cursor. Without the upper
+    // bound the window would also re-include every newer round already loaded.
+    const where = lowerBound
+      ? and(
+          mainlineWhere,
+          this.messageAtOrAfter(lowerBound),
+          cursor ? this.messageStrictlyBefore(cursor) : undefined,
+        )
+      : sql`false`;
 
     const messages = await this.queryWithWhere({
       current: 0,
@@ -1909,11 +1934,11 @@ export class MessageModel {
       where,
       // Only assemble group nodes within this page's window (not the whole topic),
       // so scroll-up pages don't repeat groups or eagerly load compressed history.
-      windowGroupNodes: true,
+      groupNodeWindow,
     });
 
     // `lowerBound.createdAt` is already the lossless microsecond cursor string.
-    return { hasMore, messages, nextCursor: hasMore ? lowerBound : null };
+    return { hasMore, messages, nextCursor: hasMore && lowerBound ? lowerBound : null };
   };
 
   /**
@@ -2006,7 +2031,7 @@ export class MessageModel {
     result,
     timing,
     topicId,
-    windowed,
+    window,
   }: {
     /**
      * Effective visitor gate resolved by the caller (per-call
@@ -2026,18 +2051,26 @@ export class MessageModel {
     result: { createdAt: Date }[];
     timing?: ModelTimingContext;
     topicId?: string;
-    windowed?: boolean;
+    /** Explicit group window (cursor pagination); overrides the row-derived one. */
+    window?: MessageGroupNodeWindow;
   }): Promise<UIChatMessage[]> => {
     if (!topicId) return [];
 
-    // `windowed` (cursor pagination) always constrains groups to the page's time
-    // range; otherwise only page 0 loads the whole topic's groups.
-    const useWindow = windowed || current !== 0;
+    if (window) {
+      return runTimedStage(
+        timing,
+        'db.message.queryWithWhere.messageGroups',
+        () =>
+          this.queryMessageGroupNodes(topicId, undefined, postProcessUrl, timing, {
+            allowShareVisitor,
+            window,
+          }),
+        { current, hasMessages: result.length > 0, topicId },
+      );
+    }
 
     if (result.length === 0) {
-      // A windowed page with no messages has an empty window → no groups. Only the
-      // non-windowed initial page loads a group-only topic's nodes.
-      if (useWindow) return [];
+      if (current !== 0) return [];
 
       return runTimedStage(
         timing,
@@ -2050,7 +2083,7 @@ export class MessageModel {
       );
     }
 
-    if (!useWindow) {
+    if (current === 0) {
       return runTimedStage(
         timing,
         'db.message.queryWithWhere.messageGroups',
@@ -2685,7 +2718,7 @@ export class MessageModel {
       file: { fileType: string; id?: string | null },
     ) => Promise<string>,
     timing?: ModelTimingContext,
-    options: { allowShareVisitor?: boolean } = {},
+    options: { allowShareVisitor?: boolean; window?: MessageGroupNodeWindow } = {},
   ): Promise<UIChatMessage[]> => {
     // Effective visitor gate — see `queryMessageGroupNodesForPage`. Absent
     // this predicate, a creator's default `query({ topicId })` on a visitor
@@ -2707,6 +2740,15 @@ export class MessageModel {
         gte(messageGroups.createdAt, timeRange.startTime),
         lte(messageGroups.createdAt, timeRange.endTime),
       );
+    }
+
+    // Explicit half-open `[from, before)` window from cursor pagination, compared
+    // against lossless microsecond strings so page boundaries stay exact.
+    if (options.window?.from) {
+      whereConditions.push(sql`${messageGroups.createdAt} >= ${options.window.from}::timestamptz`);
+    }
+    if (options.window?.before) {
+      whereConditions.push(sql`${messageGroups.createdAt} < ${options.window.before}::timestamptz`);
     }
 
     const groups = await runTimedStage(

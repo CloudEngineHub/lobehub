@@ -5,7 +5,7 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../../core/getTestDB';
-import { messageGroups, messages, topics, users } from '../../../schemas';
+import { agents, messageGroups, messages, topics, users } from '../../../schemas';
 import type { LobeChatDatabase } from '../../../type';
 import { MessageModel } from '../../message';
 
@@ -306,5 +306,118 @@ describe('MessageModel.queryTopicMessagesByCursor', () => {
     // the cursor page omitted it by windowing, not because it was absent.
     const full = await messageModel.query({ topicId });
     expect(full.some((m) => m.role === 'compressedGroup' && m.id === `${topicId}-cg`)).toBe(true);
+
+    // ...and the cursor walk must still reach it: the oldest page leaves the group
+    // window's lower side open, so the group dated before the first remaining
+    // mainline row is emitted exactly once rather than never.
+    const older = await messageModel.queryTopicMessagesByCursor({
+      topicId,
+      roundLimit: 1,
+      cursor: page.nextCursor,
+    });
+    expect(older.hasMore).toBe(false);
+    expect(older.messages.map((m) => m.id)).toEqual([
+      `${topicId}-cg`,
+      `${topicId}-u1`,
+      `${topicId}-a1`,
+    ]);
+  });
+
+  // LOBE-12011 P1: compression can move EVERY message of a topic into a group,
+  // leaving no mainline rows. The cursor path must still surface the synthetic
+  // `compressedGroup` node (as `query` does) instead of an empty transcript.
+  it('returns the compressed group for a topic whose whole history is compressed', async () => {
+    const topicId = 't-cursor-compressed-only';
+    await serverDB.insert(topics).values([{ id: topicId, userId }]);
+    await serverDB.insert(messageGroups).values({
+      id: `${topicId}-cg`,
+      content: 'summary of everything',
+      type: MessageGroupType.Compression,
+      topicId,
+      userId,
+      createdAt: new Date('2024-01-01T11:00:00Z'),
+    });
+    await serverDB.insert(messages).values([
+      {
+        id: `${topicId}-u1`,
+        userId,
+        topicId,
+        role: 'user',
+        content: 'q1',
+        messageGroupId: `${topicId}-cg`,
+        createdAt: new Date('2024-01-01T10:00:00Z'),
+      },
+      {
+        id: `${topicId}-a1`,
+        userId,
+        topicId,
+        role: 'assistant',
+        content: 'a1',
+        messageGroupId: `${topicId}-cg`,
+        createdAt: new Date('2024-01-01T10:00:01Z'),
+      },
+    ]);
+
+    const page = await messageModel.queryTopicMessagesByCursor({ topicId });
+
+    expect(page.messages.map((m) => ({ id: m.id, role: m.role }))).toEqual([
+      { id: `${topicId}-cg`, role: 'compressedGroup' },
+    ]);
+    expect(page.hasMore).toBe(false);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  // LOBE-12011 P1: a concrete topic is the conversation boundary. A caller passing
+  // its own agentId must still see rows written by another agent in the same topic
+  // (e.g. `callAgent` / delegated replies), matching `query`.
+  it('keeps rows from other agents in the same topic when agentId is given', async () => {
+    const topicId = 't-cursor-mixed-agent';
+    await serverDB.insert(agents).values([
+      { id: 'cursor-agent-main', userId, title: 'Main' },
+      { id: 'cursor-agent-sub', userId, title: 'Sub' },
+    ]);
+    await serverDB.insert(topics).values([{ id: topicId, userId }]);
+    await serverDB.insert(messages).values([
+      {
+        id: `${topicId}-u1`,
+        userId,
+        topicId,
+        agentId: 'cursor-agent-main',
+        role: 'user',
+        content: 'q1',
+        createdAt: new Date('2024-01-01T10:00:00Z'),
+      },
+      {
+        id: `${topicId}-a1`,
+        userId,
+        topicId,
+        agentId: 'cursor-agent-sub',
+        role: 'assistant',
+        content: 'delegated reply',
+        parentId: `${topicId}-u1`,
+        createdAt: new Date('2024-01-01T10:00:01Z'),
+      },
+      {
+        id: `${topicId}-a2`,
+        userId,
+        topicId,
+        agentId: 'cursor-agent-main',
+        role: 'assistant',
+        content: 'final',
+        parentId: `${topicId}-a1`,
+        createdAt: new Date('2024-01-01T10:00:02Z'),
+      },
+    ]);
+
+    const page = await messageModel.queryTopicMessagesByCursor({
+      agentId: 'cursor-agent-main',
+      topicId,
+    });
+
+    expect(page.messages.map((m) => m.id)).toEqual([
+      `${topicId}-u1`,
+      `${topicId}-a1`,
+      `${topicId}-a2`,
+    ]);
   });
 });
