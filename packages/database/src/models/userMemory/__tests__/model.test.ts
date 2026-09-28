@@ -1504,6 +1504,46 @@ describe('UserMemoryModel', () => {
       expect(updated?.type).toBe(IdentityTypeEnum.Professional);
     });
 
+    // A tool update that names one metadata key must not drop the others.
+    it.each([MergeStrategyEnum.Replace, MergeStrategyEnum.Merge])(
+      'keeps unmentioned metadata keys on a partial tool update (%s)',
+      async (mergeStrategy) => {
+        const { identityId, userMemoryId } = await memoryModel.addIdentityEntry({
+          base: { metadata: { scoreConfidence: 0.4, sourceEvidence: 'said so in chat' } },
+          identity: {
+            description: 'original desc',
+            metadata: { scoreConfidence: 0.4, sourceEvidence: 'said so in chat' },
+            role: 'original role',
+          },
+        });
+
+        const success = await memoryModel.updateIdentityEntry({
+          base: { metadata: { scoreConfidence: 0.9 } },
+          identity: { metadata: { scoreConfidence: 0.9 } },
+          identityId,
+          mergeStrategy,
+          preserveOmittedFields: true,
+        });
+
+        expect(success).toBe(true);
+        const identityRow = await serverDB.query.userMemoriesIdentities.findFirst({
+          where: eq(userMemoriesIdentities.id, identityId),
+        });
+        const baseRow = await serverDB.query.userMemories.findFirst({
+          where: eq(userMemories.id, userMemoryId),
+        });
+        expect(identityRow?.metadata).toEqual({
+          scoreConfidence: 0.9,
+          sourceEvidence: 'said so in chat',
+        });
+        expect(baseRow?.metadata).toEqual({
+          scoreConfidence: 0.9,
+          sourceEvidence: 'said so in chat',
+        });
+        expect(identityRow?.description).toBe('original desc');
+      },
+    );
+
     it('should not update other user identity', async () => {
       const otherModel = new UserMemoryModel(serverDB, otherUserId);
       const { identityId } = await otherModel.addIdentityEntry({

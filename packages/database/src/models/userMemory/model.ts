@@ -436,6 +436,15 @@ export interface GetMemoryDetailParams {
   layer: LayersEnum;
 }
 
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+/** Shallow-merge supplied metadata keys over the stored object, keeping keys not supplied. */
+const mergeMetadataKeys = (stored: unknown, supplied: Record<string, unknown>) => ({
+  ...(isPlainRecord(stored) ? stored : {}),
+  ...supplied,
+});
+
 export class UserMemoryModel {
   static parseAssociatedObjects(value?: unknown): Record<string, unknown>[] {
     if (!Array.isArray(value)) return [];
@@ -2380,11 +2389,21 @@ export class UserMemoryModel {
 
       let baseUpdate: Partial<typeof userMemories.$inferInsert> = {};
       let identityUpdate: Partial<typeof userMemoriesIdentities.$inferInsert> = {};
+      const storedIdentityMetadata = identity.metadata;
 
       if (params.base) {
         baseUpdate = merge(baseUpdate, params.base);
         if (baseUpdate.lastAccessedAt !== undefined) {
           baseUpdate.lastAccessedAt = coerceDate(baseUpdate.lastAccessedAt) ?? new Date();
+        }
+
+        if (params.preserveOmittedFields && isPlainRecord(baseUpdate.metadata)) {
+          const [storedBase] = await tx
+            .select({ metadata: userMemories.metadata })
+            .from(userMemories)
+            .where(and(eq(userMemories.id, identity.userMemoryId), this.memoryWhere(userMemories)))
+            .limit(1);
+          baseUpdate.metadata = mergeMetadataKeys(storedBase?.metadata, baseUpdate.metadata);
         }
 
         if (Object.keys(baseUpdate).length > 0) {
@@ -2454,6 +2473,15 @@ export class UserMemoryModel {
           if (params.identity.capturedAt !== undefined) {
             identityUpdate.capturedAt = params.identity.capturedAt;
           }
+        }
+
+        // A partial tool update names only the metadata keys it changes (e.g. scoreConfidence);
+        // keep the other stored keys such as sourceEvidence instead of replacing the object.
+        if (params.preserveOmittedFields && isPlainRecord(identityUpdate.metadata)) {
+          identityUpdate.metadata = mergeMetadataKeys(
+            storedIdentityMetadata,
+            identityUpdate.metadata,
+          );
         }
 
         if (Object.keys(identityUpdate).length > 0) {
